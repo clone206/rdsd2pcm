@@ -1,8 +1,8 @@
 # dsd2pcm/dsd2pcm/README.md
 
-# DSD2PCM
+# rdsd2pcm
 
-RDSD2PCM is a Rust application that converts raw DSD64 audio data into 352 kHz raw PCM format. This project implements a filter that reads data from standard input and writes the converted PCM data to standard output. It is a rust implementation of the dsd2pcm application, using the C library directly.
+rdsd2pcm is a Rust application that converts raw DSD64 audio data into 352 kHz raw PCM format. This project implements a filter that reads data from standard input and writes the converted PCM data to standard output. It is a rust implementation of the dsd2pcm application, using the C library directly.
 
 ## Features
 
@@ -12,12 +12,16 @@ RDSD2PCM is a Rust application that converts raw DSD64 audio data into 352 kHz r
 - Implements a noise shaping algorithm for 16 bit output to preserve dynamic range.
 - Assumes planar format DSD with a block size of 4096 bytes
 
+## Build
+
+`cargo build`
+
 ## Usage
 
 To run the application, use the following syntax:
 
 ```
-dsd2pcm <channels> <bitorder> <bitdepth>
+./target/debug/dsd2pcm <channels> <bitorder> <bitdepth>
 ```
 
 ### Parameters
