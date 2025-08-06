@@ -24,3 +24,5 @@
 # Generated test coverage
 *.profraw
 coverage/
+
+*.pcm
