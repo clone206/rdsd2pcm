@@ -28,6 +28,12 @@ To run the application, use the following syntax:
 - `bitorder`: Specify 'L' for LSB first or 'M' for MSB first.
 - `bitdepth`: Specify '16' for 16 bits or '24' for 24 bits.
 
+### Example
+
+```
+./target/debug/dsd2pcm 2 L 24 < 1kHz_stereo_p.dsd > outfile.pcm
+```
+
 ### Note
 
 At 16 bits/sample, a noise shaper is activated to preserve a dynamic range of 135 dB below 30 kHz.
