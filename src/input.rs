@@ -25,6 +25,16 @@ use std::fs::File;
 use std::io::{self, BufReader, IoSliceMut, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+pub enum Endianness {
+    LsbFirst,
+    MsbFirst,
+}
+
+pub enum FmtType {
+    Planar,
+    Interleaved,
+}
+
 pub struct InputContext {
     dsd_rate: i32,
     channels_num: u32,
@@ -86,16 +96,15 @@ impl InputContext {
     pub fn new(
         in_path: Option<PathBuf>,
         format: char,
-        endian: char,
+        endian: Endianness,
         dsd_rate: i32,
         block_size: u32,
         channels: u32,
         std_in: bool,
     ) -> Result<Self, Box<dyn Error>> {
-        let lsbit_first = match endian.to_ascii_lowercase() {
-            'l' => true,
-            'm' => false,
-            _ => return Err("No endianness detected!".into()),
+        let lsbit_first = match endian {
+            Endianness::LsbFirst => true,
+            Endianness::MsbFirst => false,
         };
 
         let interleaved = match format.to_ascii_lowercase() {

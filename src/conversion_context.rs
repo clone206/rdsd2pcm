@@ -38,6 +38,13 @@ use std::time::Instant;
 const RETRIES: usize = 1; // Max retries for progress send
 pub const ONE_HUNDRED_PERCENT: f32 = 100.0;
 
+pub enum FilterType {
+    Dsd2Pcm,
+    Equiripple,
+    Chebyshev,
+    XLD
+}
+
 pub struct ConversionContext {
     in_ctx: InputContext,
     out_ctx: OutputContext,
@@ -92,8 +99,8 @@ impl ConversionContext {
             .init(out_frames_capacity, ctx.in_ctx.channels_num())?;
 
         debug!(
-            "Dither type: {}",
-            ctx.out_ctx.dither().dither_type().to_ascii_uppercase()
+            "Dither type: {:#?}",
+            ctx.out_ctx.dither().dither_type()
         );
         Ok(ctx)
     }

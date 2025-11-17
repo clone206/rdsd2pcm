@@ -19,25 +19,28 @@
 use rand::Rng;
 use std::env;
 
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum DitherType {
+    TPDF,
+    FPD,
+    Rectangular,
+    None,
+}
+
 #[derive(Clone)]
 pub struct Dither {
     fpd: u32, // Floating-point dither
-    dither_type: char,
+    dither_type: DitherType,
     neg_scale: f64, // Pre-dither scale
     pos_scale: f64, // Post-dither scale
 }
 
 impl Dither {
-    pub fn dither_type(&self) -> char {
+    pub fn dither_type(&self) -> DitherType {
         self.dither_type
     }
 
-    pub fn new(dither_type: char) -> Result<Self, &'static str> {
-        let dither_type = dither_type.to_ascii_lowercase();
-        if !['t', 'f', 'x', 'r'].contains(&dither_type) {
-            return Err("Invalid dither type!");
-        }
-
+    pub fn new(dither_type: DitherType) -> Result<Self, &'static str> {
         // Parse env var once at construction
         let (neg_scale, pos_scale) = match env::var("DSD2DXD_DITHERSCALE")
         {
@@ -60,10 +63,10 @@ impl Dither {
     }
 
     pub fn init(&mut self) {
-        if self.dither_type != 'x' {
+        if self.dither_type != DitherType::None {
             let _ = rand::thread_rng();
         }
-        if self.dither_type == 'f' {
+        if self.dither_type == DitherType::FPD {
             self.init_rand();
         }
     }
@@ -86,10 +89,10 @@ impl Dither {
     pub fn process_samp(&mut self, sample: &mut f64) {
         *sample *= self.neg_scale;
         match self.dither_type {
-            't' => *sample += self.process_tpdf(),
-            'r' => *sample += self.process_rpdf(),
-            'f' => self.fpdither(sample),
-            _ => (),
+            DitherType::TPDF => *sample += self.process_tpdf(),
+            DitherType::Rectangular => *sample += self.process_rpdf(),
+            DitherType::FPD => self.fpdither(sample),
+            DitherType::None => (),
         }
         *sample *= self.pos_scale;
     }

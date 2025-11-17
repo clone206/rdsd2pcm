@@ -27,6 +27,13 @@ use std::path::PathBuf;
 use std::{io, vec};
 use log::{info, debug};
 
+pub enum OutputType {
+    Stdout,
+    Wav,
+    Aiff,
+    Flac,
+}
+
 pub struct OutputContext {
     float_data: Vec<f64>,
     scale_factor: f64,
