@@ -27,6 +27,7 @@ use std::path::PathBuf;
 use std::{io, vec};
 use log::{info, debug};
 
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum OutputType {
     Stdout,
     Wav,
@@ -41,7 +42,7 @@ pub struct OutputContext {
     channels_num: u32,
     rate: i32,
     bytes_per_sample: i32,
-    output: char,
+    output: OutputType,
     path: Option<PathBuf>,
     peak_level: i32,
     clips: i32,
@@ -71,7 +72,7 @@ impl OutputContext {
     pub fn bytes_per_sample(&self) -> i32 {
         self.bytes_per_sample
     }
-    pub fn output(&self) -> char {
+    pub fn output(&self) -> OutputType {
         self.output
     }
     pub fn path(&self) -> &Option<PathBuf> {
@@ -86,7 +87,7 @@ impl OutputContext {
 
     pub fn new(
         out_bits: i32,
-        out_type: char,
+        out_type: OutputType,
         out_vol: f64,
         out_rate: i32,
         out_path: Option<PathBuf>,
@@ -96,19 +97,14 @@ impl OutputContext {
             return Err("Unsupported bit depth".into());
         }
 
-        let output = out_type.to_ascii_lowercase();
-        if !['s', 'w', 'a', 'f'].contains(&output) {
-            return Err("Unrecognized output type".into());
-        }
-
-        if output == 's' && out_path.is_some() {
+        if out_type == OutputType::Stdout && out_path.is_some() {
             return Err(
                 "Cannot specify output path when outputting to stdout"
                     .into(),
             );
         }
 
-        if out_bits == 32 && output != 's' && output != 'w' {
+        if out_bits == 32 && out_type != OutputType::Stdout && out_type != OutputType::Wav {
             return Err(
                 "32 bit float only allowed with wav or stdout".into()
             );
@@ -129,7 +125,7 @@ impl OutputContext {
 
         let mut ctx = Self {
             bits: out_bits,
-            output,
+            output: out_type,
             bytes_per_sample,
             channels_num: 0,
             rate: out_rate,
@@ -168,7 +164,7 @@ impl OutputContext {
         self.last_samps_clipped_high = 0;
         self.dither.init();
 
-        if self.output == 's' {
+        if self.output == OutputType::Stdout {
             self.stdout_buf = vec![
                 0u8;
                 out_frames_capacity
@@ -228,14 +224,14 @@ impl OutputContext {
     }
 
     pub fn save_file(&self, out_path: &PathBuf) -> Result<(), String> {
-        match self.output.to_ascii_lowercase() {
-            'w' => {
+        match self.output {
+            OutputType::Wav => {
                 self.save_and_print_file(out_path, AudioFileFormat::Wave)?;
             }
-            'a' => {
+            OutputType::Aiff => {
                 self.save_and_print_file(out_path, AudioFileFormat::Aiff)?;
             }
-            'f' => {
+            OutputType::Flac => {
                 self.save_and_print_file(out_path, AudioFileFormat::Flac)?;
             }
             _ => {}
@@ -420,7 +416,7 @@ impl OutputContext {
         chan: usize,
     ) {
         // Output / packing for channel
-        if self.output == 's' {
+        if self.output == OutputType::Stdout {
             // Interleave into pcm_data (handle float vs integer separately)
             let bps = self.bytes_per_sample as usize; // 4 for 32-bit float
             let mut pcm_pos = chan * bps;

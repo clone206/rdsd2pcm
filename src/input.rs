@@ -25,11 +25,13 @@ use std::fs::File;
 use std::io::{self, BufReader, IoSliceMut, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum Endianness {
     LsbFirst,
     MsbFirst,
 }
 
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum FmtType {
     Planar,
     Interleaved,
@@ -95,7 +97,7 @@ impl InputContext {
 
     pub fn new(
         in_path: Option<PathBuf>,
-        format: char,
+        format: FmtType,
         endian: Endianness,
         dsd_rate: i32,
         block_size: u32,
@@ -107,10 +109,9 @@ impl InputContext {
             Endianness::MsbFirst => false,
         };
 
-        let interleaved = match format.to_ascii_lowercase() {
-            'p' => false,
-            'i' => true,
-            _ => return Err("No fmt detected!".into()),
+        let interleaved = match format {
+            FmtType::Planar => false,
+            FmtType::Interleaved => true,
         };
 
         let parent_path = if let Some(path) = &in_path {
