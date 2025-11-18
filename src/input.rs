@@ -117,7 +117,7 @@ impl InputContext {
             return Err("Unsupported DSD input rate.".into());
         }
 
-        let ctx = Self {
+        let mut ctx = Self {
             lsbit_first,
             interleaved,
             std_in: path_attrs.std_in,
@@ -140,6 +140,8 @@ impl InputContext {
             channel_buffers: Vec::new(),
             file_format: path_attrs.file_format,
         };
+
+        ctx.init()?;
 
         Ok(ctx)
     }

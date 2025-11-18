@@ -73,7 +73,7 @@ impl Rdsd2Pcm {
             Dither::new(dither_type)?,
         )?;
 
-        let mut in_ctx = InputContext::new(
+        let in_ctx = InputContext::new(
             in_path.clone(),
             in_format,
             endianness,
@@ -81,8 +81,6 @@ impl Rdsd2Pcm {
             in_block_size,
             num_channels,
         )?;
-
-        in_ctx.init()?;
 
         let conv_ctx = ConversionContext::new(
             in_ctx,
