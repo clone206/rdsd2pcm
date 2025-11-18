@@ -80,7 +80,6 @@ impl Rdsd2Pcm {
             dsd_rate,
             in_block_size,
             num_channels,
-            in_path.is_none(),
         )?;
 
         let conv_ctx = ConversionContext::new(

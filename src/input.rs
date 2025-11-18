@@ -16,15 +16,22 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
-use crate::{Endianness, FmtType};
 use crate::byte_precalc_decimator::bit_reverse_u8;
 use crate::dsd::{DFF_BLOCK_SIZE, DSD_64_RATE, DsdFile, DsdFileFormat};
+use crate::{Endianness, FmtType};
 use log::{debug, info};
 use std::error::Error;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufReader, IoSliceMut, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+
+struct InputPathAttrs {
+    std_in: bool,
+    file_format: Option<DsdFileFormat>,
+    parent_path: Option<PathBuf>,
+    file_name: OsString,
+}
 
 pub struct InputContext {
     dsd_rate: i32,
@@ -88,13 +95,12 @@ impl InputContext {
     pub fn new(
         in_path: Option<PathBuf>,
         format: FmtType,
-        endian: Endianness,
+        endianness: Endianness,
         dsd_rate: i32,
         block_size: u32,
         channels: u32,
-        std_in: bool,
     ) -> Result<Self, Box<dyn Error>> {
-        let lsbit_first = match endian {
+        let lsbit_first = match endianness {
             Endianness::LsbFirst => true,
             Endianness::MsbFirst => false,
         };
@@ -104,51 +110,20 @@ impl InputContext {
             FmtType::Interleaved => true,
         };
 
-        let parent_path = if let Some(path) = &in_path {
-            if path.is_dir() {
-                return Err("Input path cannot be a directory".into());
-            }
-            Some(path.parent().unwrap_or(Path::new("")).to_path_buf())
-        } else {
-            None
-        };
-
-        let dsd_file_format = if std_in {
-            None
-        } else if let Some(path) = &in_path
-            && let Some(ext_str) = path.extension()
-        {
-            match ext_str.to_ascii_lowercase().to_string_lossy().as_ref() {
-                "dsf" => Some(DsdFileFormat::Dsf),
-                "dff" => Some(DsdFileFormat::Dsdiff),
-                _ => Some(DsdFileFormat::Raw),
-            }
-        } else {
-            Some(DsdFileFormat::Raw)
-        };
+        let path_attrs = Self::get_path_attrs(&in_path)?;
 
         // Only enforce CLI dsd_rate for stdin or raw inputs
-        if (std_in || !dsd_file_format.is_some())
-            && ![1, 2, 4].contains(&dsd_rate)
-        {
+        if path_attrs.std_in && ![1, 2, 4].contains(&dsd_rate) {
             return Err("Unsupported DSD input rate.".into());
         }
-
-        let file_name: OsString = if let Some(path) = &in_path {
-            path.file_name()
-                .unwrap_or_else(|| "stdin".as_ref())
-                .to_os_string()
-        } else {
-            OsString::from("stdin")
-        };
 
         let ctx = Self {
             lsbit_first,
             interleaved,
-            std_in,
+            std_in: path_attrs.std_in,
             dsd_rate,
             in_path,
-            parent_path,
+            parent_path: path_attrs.parent_path,
             channels_num: channels,
             block_size: block_size,
             frame_size: block_size * channels,
@@ -157,16 +132,59 @@ impl InputContext {
             file: None,
             tag: None,
             reader: Box::new(io::empty()),
-            file_name,
+            file_name: path_attrs.file_name,
             bytes_remaining: 0,
             bytes_processed: 0,
             chan_bits_processed: 0,
             dsd_data: Vec::new(),
             channel_buffers: Vec::new(),
-            file_format: dsd_file_format,
+            file_format: path_attrs.file_format,
         };
 
         Ok(ctx)
+    }
+
+    fn get_path_attrs(
+        path: &Option<PathBuf>,
+    ) -> Result<InputPathAttrs, Box<dyn Error>> {
+        if let Some(p) = path {
+            if p.is_dir() {
+                return Err("Input path cannot be a directory".into());
+            }
+            let file_format = if let Some(ext_str) = p.extension() {
+                match ext_str
+                    .to_ascii_lowercase()
+                    .to_string_lossy()
+                    .as_ref()
+                {
+                    "dsf" => Some(DsdFileFormat::Dsf),
+                    "dff" => Some(DsdFileFormat::Dsdiff),
+                    _ => Some(DsdFileFormat::Raw),
+                }
+            } else {
+                Some(DsdFileFormat::Raw)
+            };
+            let parent_path =
+                Some(p.parent().unwrap_or(Path::new("")).to_path_buf());
+            let file_name = p
+                .file_name()
+                .unwrap_or_else(|| "stdin".as_ref())
+                .to_os_string();
+
+            Ok(InputPathAttrs {
+                std_in: false,
+                file_format,
+                parent_path,
+                file_name,
+            })
+        } else {
+            Ok(InputPathAttrs {
+                std_in: true,
+                file_format: None,
+                parent_path: None,
+                file_name: OsString::from("stdin"),
+            })
+        }
     }
 
     pub fn init(&mut self) -> Result<(), Box<dyn Error>> {
@@ -229,7 +247,11 @@ impl InputContext {
             let this_read =
                 self.reader.read_vectored(local_channel_buffs)?;
             if this_read == 0 {
-                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Unexpected end of file").into());
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "Unexpected end of file",
+                )
+                .into());
             }
             self.channel_buffers = local_channel_buffs
                 .iter()
@@ -464,7 +486,11 @@ impl Clone for InputContext {
             file: None,                    // File handle not cloned
             bytes_remaining: self.bytes_remaining,
             chan_bits_processed: self.chan_bits_processed,
-            dsd_data: vec![0; self.block_size as usize * self.channels_num as usize],
+            dsd_data: vec![
+                0;
+                self.block_size as usize
+                    * self.channels_num as usize
+            ],
             channel_buffers: Vec::new(), // Buffers not cloned
             file_format: self.file_format,
         }
