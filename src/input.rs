@@ -142,7 +142,7 @@ impl InputContext {
             OsString::from("stdin")
         };
 
-        let mut ctx = Self {
+        let ctx = Self {
             lsbit_first,
             interleaved,
             std_in,

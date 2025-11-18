@@ -18,8 +18,7 @@
 
 use id3::Tag;
 use std::{
-    fs::{self, File},
-    io,
+    fs::File,
     path::{Path, PathBuf},
 };
 use log::warn;
@@ -35,8 +34,6 @@ pub enum DsdFileFormat {
 pub const DSD_64_RATE: u32 = 2822400;
 pub const DFF_BLOCK_SIZE: u32 = 1;
 pub const DSF_BLOCK_SIZE: u32 = 4096;
-
-pub const DSD_EXTENSIONS: [&str; 3] = ["dsf", "dff", "dsd"];
 
 pub struct DsdFile {
     audio_length: u64,
@@ -161,48 +158,3 @@ impl DsdFile {
     }
 }
 
-/// Find all DSD files in the provided paths, optionally recursing into directories
-pub fn find_dsd_files(
-    paths: &[PathBuf],
-    recurse: bool,
-) -> io::Result<Vec<PathBuf>> {
-    let mut file_paths = Vec::new();
-    for path in paths {
-        if path.is_dir() {
-            if recurse {
-                // Recurse into all directory entries
-                let entries: Vec<PathBuf> = fs::read_dir(path)?
-                    .filter_map(|e| e.ok().map(|d| d.path()))
-                    .collect();
-                file_paths.extend(find_dsd_files(&entries, recurse)?);
-            } else {
-                // Non-recursive: include only top-level files that are DSD
-                for entry in fs::read_dir(path)? {
-                    let entry_path = entry?.path();
-                    if entry_path.is_file() && is_dsd_file(&entry_path) {
-                        file_paths
-                            .push(entry_path.canonicalize()?.clone());
-                    }
-                }
-            }
-        } else if path.is_file() && is_dsd_file(path) {
-            // Single push site for matching files
-            file_paths.push(path.canonicalize()?.clone());
-        }
-    }
-    file_paths.sort();
-    file_paths.dedup();
-    Ok(file_paths)
-}
-
-/// Check if the provided path is a DSD file based on its extension
-pub fn is_dsd_file(path: &PathBuf) -> bool {
-    if path.is_file()
-        && let Some(ext) = path.extension()
-        && let ext_lower = ext.to_ascii_lowercase().to_string_lossy()
-        && DSD_EXTENSIONS.contains(&ext_lower.as_ref())
-    {
-        return true;
-    }
-    false
-}

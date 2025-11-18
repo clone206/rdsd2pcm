@@ -1,0 +1,1 @@
+A pure Rust library for converting DSD to PCM. Logging implemented via log crate. Reads DSD from stdin or file, writes PCM to stdout or file.
