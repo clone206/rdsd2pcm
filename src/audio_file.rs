@@ -38,8 +38,6 @@ use flac_codec::metadata::{Picture, VorbisComment};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AudioFileFormat {
-    Error,
-    NotLoaded,
     Wave,
     Aiff,
     Flac,
@@ -100,10 +98,6 @@ where
             AudioFileFormat::Flac => {
                 self.save_flac_file(path, vorbis, pictures)
             }
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Unsupported format",
-            )),
         }
     }
 

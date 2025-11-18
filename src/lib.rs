@@ -25,17 +25,7 @@ pub const ONE_HUNDRED_PERCENT: f32 = 100.0;
 pub const DSD_EXTENSIONS: [&str; 3] = ["dsf", "dff", "dsd"];
 
 pub struct Rdsd2Pcm {
-    in_format: FmtType,
-    endianness: Endianness,
-    dsd_rate: i32,
-    in_block_size: u32,
-    num_channels: u32,
-    std_in: bool,
-    filt_type: FilterType,
-    append_rate_suffix: bool,
-    base_dir: PathBuf,
-    out_ctx: OutputContext,
-    in_ctx: Option<InputContext>,
+    conv_ctx: ConversionContext,
     in_file_name: String,
 }
 
@@ -57,6 +47,7 @@ impl Rdsd2Pcm {
     /// * `filt_type` - Filter type to use for conversion
     /// * `append_rate_suffix` - Whether to append the sample rate to output file names and album tags
     /// * `base_dir` - Base directory for output files' relative paths
+    /// * `in_path` - Optional path to input DSD file. .dsd files are considered raw DSD.
     pub fn new(
         bit_depth: i32,
         out_type: OutputType,
@@ -72,6 +63,7 @@ impl Rdsd2Pcm {
         filt_type: FilterType,
         append_rate_suffix: bool,
         base_dir: PathBuf,
+        in_path: Option<PathBuf>,
     ) -> Result<Self, Box<dyn Error>> {
         let out_ctx = OutputContext::new(
             bit_depth,
@@ -82,45 +74,30 @@ impl Rdsd2Pcm {
             Dither::new(dither_type)?,
         )?;
 
-        let rdsd2pcm = Self {
+        let in_ctx = InputContext::new(
+            in_path.clone(),
             in_format,
             endianness,
             dsd_rate,
             in_block_size,
             num_channels,
-            std_in: true,
+            in_path.is_none(),
+        )?;
+
+        let conv_ctx = ConversionContext::new(
+            in_ctx,
+            out_ctx,
             filt_type,
             append_rate_suffix,
             base_dir,
-            in_file_name: "".to_string(),
-            out_ctx,
-            in_ctx: None,
+        )?;
+
+        let rdsd2pcm = Self {
+            in_file_name: conv_ctx.file_name(),
+            conv_ctx,
         };
 
         Ok(rdsd2pcm)
-    }
-
-    /// Load the input file from path or set up for stdin if None
-    /// * `path` - Optional path to input DSD file. .dsd files are considered raw DSD.
-    pub fn load_input(
-        &mut self,
-        path: Option<PathBuf>,
-    ) -> Result<(), Box<dyn Error>> {
-        self.std_in = path.is_none();
-        let in_ctx = InputContext::new(
-            path,
-            self.in_format,
-            self.endianness,
-            self.dsd_rate,
-            self.in_block_size,
-            self.num_channels,
-            self.std_in,
-        )?;
-
-        self.in_file_name =
-            in_ctx.file_name().to_string_lossy().into_owned();
-        self.in_ctx = Some(in_ctx);
-        Ok(())
     }
 
     /// Perform the conversion from DSD to PCM
@@ -130,19 +107,7 @@ impl Rdsd2Pcm {
         &mut self,
         percent_sender: Option<mpsc::Sender<f32>>,
     ) -> Result<(), Box<dyn Error>> {
-        let Some(mut in_ctx) = self.in_ctx.take() else {
-            return Err("Input context not initialized".into());
-        };
-        in_ctx.init()?;
-
-        let mut conv_ctx = ConversionContext::new(
-            in_ctx,
-            self.out_ctx.clone(),
-            self.filt_type,
-            self.append_rate_suffix,
-            self.base_dir.clone(),
-        )?;
-        conv_ctx.do_conversion(percent_sender)
+        self.conv_ctx.do_conversion(percent_sender)
     }
 
     /// Get the input file name (or empty string for stdin)

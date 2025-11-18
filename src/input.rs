@@ -161,7 +161,7 @@ impl InputContext {
             bytes_remaining: 0,
             bytes_processed: 0,
             chan_bits_processed: 0,
-            dsd_data: vec![0; block_size as usize * channels as usize],
+            dsd_data: Vec::new(),
             channel_buffers: Vec::new(),
             file_format: dsd_file_format,
         };
@@ -170,6 +170,8 @@ impl InputContext {
     }
 
     pub fn init(&mut self) -> Result<(), Box<dyn Error>> {
+        self.dsd_data =
+            vec![0; self.block_size as usize * self.channels_num as usize];
         self.set_block_size(self.block_size, false);
 
         if self.std_in {

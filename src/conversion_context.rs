@@ -55,6 +55,10 @@ pub struct ConversionContext {
 }
 
 impl ConversionContext {
+    pub fn file_name(&self) -> String {
+        self.in_ctx.file_name().to_string_lossy().into_owned()
+    }
+
     pub fn new(
         in_ctx: InputContext,
         out_ctx: OutputContext,
@@ -92,14 +96,10 @@ impl ConversionContext {
         ctx.setup_resamplers()?;
         ctx.out_ctx
             .init(out_frames_capacity, ctx.in_ctx.channels_num())?;
+        ctx.in_ctx.init()?;
 
         debug!("Dither type: {:#?}", ctx.out_ctx.dither().dither_type());
         Ok(ctx)
-    }
-
-    /// Get the input file name without the parent path
-    pub fn input_file_name(&self) -> String {
-        self.in_ctx.file_name().to_string_lossy().into_owned()
     }
 
     fn setup_resamplers(&mut self) -> Result<(), Box<dyn Error>> {
