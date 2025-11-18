@@ -26,7 +26,6 @@ pub const DSD_EXTENSIONS: [&str; 3] = ["dsf", "dff", "dsd"];
 
 pub struct Rdsd2Pcm {
     conv_ctx: ConversionContext,
-    in_file_name: String,
 }
 
 impl Rdsd2Pcm {
@@ -93,7 +92,6 @@ impl Rdsd2Pcm {
         )?;
 
         let rdsd2pcm = Self {
-            in_file_name: conv_ctx.file_name(),
             conv_ctx,
         };
 
@@ -112,7 +110,7 @@ impl Rdsd2Pcm {
 
     /// Get the input file name (or empty string for stdin)
     pub fn file_name(&self) -> String {
-        self.in_file_name.clone()
+        self.conv_ctx.file_name()
     }
 }
 
