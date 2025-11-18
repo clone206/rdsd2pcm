@@ -96,7 +96,6 @@ impl ConversionContext {
         ctx.setup_resamplers()?;
         ctx.out_ctx
             .init(out_frames_capacity, ctx.in_ctx.channels_num())?;
-        ctx.in_ctx.init()?;
 
         debug!("Dither type: {:#?}", ctx.out_ctx.dither().dither_type());
         Ok(ctx)
