@@ -44,7 +44,7 @@ or implied, of Sebastian Gesemann.
 // - Produces one output per 'decim' input bits (decim/8 bytes).
 // ============================================================================
 
-use crate::{conversion_context::FilterType, filters::{
+use crate::{FilterType, filters::{
     HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB,
     HTAPS_DDR_16TO1_EQ, HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ,
     HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ, HTAPS_DSD64_8TO1_EQ,

@@ -2,7 +2,7 @@ mod audio_file;
 mod byte_precalc_decimator;
 mod conversion_context;
 mod dither;
-mod dsd;
+pub mod dsd;
 mod filters;
 mod filters_lm;
 mod input;
@@ -13,12 +13,9 @@ use std::{error::Error, path::PathBuf, sync::mpsc};
 
 pub use dither::Dither;
 
-use crate::{
-    conversion_context::{ConversionContext, FilterType},
-    dither::DitherType,
-    input::{Endianness, FmtType, InputContext},
-    output::{OutputContext, OutputType},
-};
+use crate::{conversion_context::ConversionContext, input::InputContext, output::OutputContext};
+
+pub const ONE_HUNDRED_PERCENT: f32 = 100.0;
 
 pub struct Rdsd2Pcm {
     format: FmtType,
@@ -31,6 +28,7 @@ pub struct Rdsd2Pcm {
     append_rate_suffix: bool,
     base_dir: PathBuf,
     out_ctx: OutputContext,
+    in_ctx: Option<InputContext>,
     file_name: String,
 }
 
@@ -51,7 +49,6 @@ impl Rdsd2Pcm {
         dsd_rate: i32,
         block_size: u32,
         channels: u32,
-        std_in: bool,
         filt_type: FilterType,
         append_rate_suffix: bool,
         base_dir: PathBuf,
@@ -71,22 +68,20 @@ impl Rdsd2Pcm {
             dsd_rate,
             block_size,
             channels,
-            std_in,
+            std_in: true,
             filt_type,
             append_rate_suffix,
             base_dir,
             file_name: "".to_string(),
             out_ctx,
+            in_ctx: None,
         };
 
         Ok(rdsd2pcm)
     }
 
-    pub fn do_conversion(
-        &mut self,
-        path: Option<PathBuf>,
-        sender: Option<mpsc::Sender<f32>>,
-    ) -> Result<(), Box<dyn Error>> {
+    pub fn load_input(&mut self, path: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
+        self.std_in = path.is_none();
         let in_ctx = InputContext::new(
             path,
             self.format,
@@ -97,6 +92,20 @@ impl Rdsd2Pcm {
             self.std_in,
         )?;
 
+        self.file_name = in_ctx.file_name().to_string_lossy().into_owned();
+        self.in_ctx = Some(in_ctx);
+        Ok(())
+    }
+
+    pub fn do_conversion(
+        &mut self,
+        sender: Option<mpsc::Sender<f32>>,
+    ) -> Result<(), Box<dyn Error>> {
+        let Some(mut in_ctx) = self.in_ctx.take() else {
+            return Err("Input context not initialized".into());
+        };
+        in_ctx.init()?;
+
         let mut conv_ctx = ConversionContext::new(
             in_ctx,
             self.out_ctx.clone(),
@@ -104,8 +113,42 @@ impl Rdsd2Pcm {
             self.append_rate_suffix,
             self.base_dir.clone(),
         )?;
-
-        self.file_name = conv_ctx.input_file_name();
         conv_ctx.do_conversion(sender)
     }
+}
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum Endianness {
+    LsbFirst,
+    MsbFirst,
+}
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum FmtType {
+    Planar,
+    Interleaved,
+}
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum DitherType {
+    TPDF,
+    FPD,
+    Rectangular,
+    None,
+}
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum FilterType {
+    Dsd2Pcm,
+    Equiripple,
+    Chebyshev,
+    XLD,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub enum OutputType {
+    Stdout,
+    Wav,
+    Aiff,
+    Flac,
 }

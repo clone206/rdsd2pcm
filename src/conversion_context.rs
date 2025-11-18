@@ -16,13 +16,16 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
+use crate::FilterType;
+use crate::ONE_HUNDRED_PERCENT;
+use crate::OutputType;
 use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::byte_precalc_decimator::select_precalc_taps;
 use crate::dsd::DSD_64_RATE;
 use crate::input::InputContext;
 use crate::lm_resampler::LMResampler;
 use crate::lm_resampler::compute_decim_and_upsample;
-use crate::output::{OutputContext, OutputType};
+use crate::output::OutputContext;
 use id3::TagLike;
 use log::error;
 use log::warn;
@@ -36,15 +39,6 @@ use std::sync::mpsc;
 use std::time::Instant;
 
 const RETRIES: usize = 1; // Max retries for progress send
-pub const ONE_HUNDRED_PERCENT: f32 = 100.0;
-
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub enum FilterType {
-    Dsd2Pcm,
-    Equiripple,
-    Chebyshev,
-    XLD,
-}
 
 pub struct ConversionContext {
     in_ctx: InputContext,

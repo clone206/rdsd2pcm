@@ -19,13 +19,7 @@
 use rand::Rng;
 use std::env;
 
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub enum DitherType {
-    TPDF,
-    FPD,
-    Rectangular,
-    None,
-}
+use crate::DitherType;
 
 #[derive(Clone)]
 pub struct Dither {

@@ -19,21 +19,13 @@
 use flac_codec::metadata::{self, Picture, PictureType, VorbisComment};
 use id3::TagLike;
 
-use crate::Dither;
+use crate::{Dither, OutputType};
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
 use std::error::Error;
 use std::io::Write;
 use std::path::PathBuf;
 use std::{io, vec};
 use log::{info, debug};
-
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
-pub enum OutputType {
-    Stdout,
-    Wav,
-    Aiff,
-    Flac,
-}
 
 pub struct OutputContext {
     float_data: Vec<f64>,

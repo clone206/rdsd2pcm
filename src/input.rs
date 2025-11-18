@@ -16,6 +16,7 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
+use crate::{Endianness, FmtType};
 use crate::byte_precalc_decimator::bit_reverse_u8;
 use crate::dsd::{DFF_BLOCK_SIZE, DSD_64_RATE, DsdFile, DsdFileFormat};
 use log::{debug, info};
@@ -24,18 +25,6 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufReader, IoSliceMut, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub enum Endianness {
-    LsbFirst,
-    MsbFirst,
-}
-
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub enum FmtType {
-    Planar,
-    Interleaved,
-}
 
 pub struct InputContext {
     dsd_rate: i32,
@@ -58,6 +47,7 @@ pub struct InputContext {
     chan_bits_processed: u64,
     dsd_data: Vec<u8>,
     channel_buffers: Vec<Box<[u8]>>,
+    file_format: Option<DsdFileFormat>,
 }
 
 impl InputContext {
@@ -173,21 +163,25 @@ impl InputContext {
             chan_bits_processed: 0,
             dsd_data: vec![0; block_size as usize * channels as usize],
             channel_buffers: Vec::new(),
+            file_format: dsd_file_format,
         };
 
-        ctx.set_block_size(block_size, false);
+        Ok(ctx)
+    }
 
-        if ctx.std_in {
-            ctx.set_stdin();
-        } else if let Some(format) = dsd_file_format {
-            ctx.update_from_file(format)?;
+    pub fn init(&mut self) -> Result<(), Box<dyn Error>> {
+        self.set_block_size(self.block_size, false);
+
+        if self.std_in {
+            self.set_stdin();
+        } else if let Some(format) = self.file_format {
+            self.update_from_file(format)?;
         } else {
             return Err("No valid input specified".into());
         }
 
-        ctx.set_reader()?;
-
-        Ok(ctx)
+        self.set_reader()?;
+        Ok(())
     }
 
     /// Returns true if we have reached the end of file for non-stdin inputs
@@ -444,5 +438,33 @@ impl InputContext {
             file,
         ));
         Ok(())
+    }
+}
+
+impl Clone for InputContext {
+    fn clone(&self) -> Self {
+        Self {
+            dsd_rate: self.dsd_rate,
+            channels_num: self.channels_num,
+            std_in: self.std_in,
+            bytes_processed: self.bytes_processed,
+            tag: self.tag.clone(),
+            file_name: self.file_name.clone(),
+            audio_length: self.audio_length,
+            frame_size: self.frame_size,
+            block_size: self.block_size,
+            parent_path: self.parent_path.clone(),
+            in_path: self.in_path.clone(),
+            lsbit_first: self.lsbit_first,
+            interleaved: self.interleaved,
+            audio_pos: self.audio_pos,
+            reader: Box::new(io::empty()), // Fresh placeholder; reinitialize with set_reader() if needed
+            file: None,                    // File handle not cloned
+            bytes_remaining: self.bytes_remaining,
+            chan_bits_processed: self.chan_bits_processed,
+            dsd_data: vec![0; self.block_size as usize * self.channels_num as usize],
+            channel_buffers: Vec::new(), // Buffers not cloned
+            file_format: self.file_format,
+        }
     }
 }
