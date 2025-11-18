@@ -1,39 +1,4 @@
 # rdsd2pcm
+A pure Rust library for converting DSD to PCM. Logging implemented via log crate. Reads DSD from stdin or file, writes PCM to stdout or file.
 
-rdsd2pcm is a Rust application that converts raw DSD64 audio data into 352 kHz raw PCM format. This project implements a filter that reads data from standard input and writes the converted PCM data to standard output. It is a rust implementation of the dsd2pcm application, using the C library directly.
-
-## Features
-
-- Supports multiple channels (1 to 9).
-- Configurable bit order (LSB first or MSB first).
-- Configurable bit depth (16 or 24 bits).
-- Implements a noise shaping algorithm for 16 bit output to preserve dynamic range.
-- Assumes planar format DSD with a block size of 4096 bytes
-
-## Build
-
-`cargo build`
-
-## Usage
-
-To run the application, use the following syntax:
-
-```
-./target/debug/dsd2pcm <channels> <bitorder> <bitdepth>
-```
-
-### Parameters
-
-- `channels`: Number of channels in the DSD stream (1, 2, 3, ..., 9).
-- `bitorder`: Specify 'L' for LSB first or 'M' for MSB first.
-- `bitdepth`: Specify '16' for 16 bits or '24' for 24 bits.
-
-### Example
-
-```
-./target/debug/dsd2pcm 2 L 24 < 1kHz_stereo_p.dsd > outfile.pcm
-```
-
-### Note
-
-At 16 bits/sample, a noise shaper is activated to preserve a dynamic range of 135 dB below 30 kHz.
+**Note**, this repo was previously a rust binary with a wrapper around the dsd2pcm library. For a more full-featured version of a command line binary, see [dsd2dxd](https://github.com/clone206/dsd2dxd/), which now uses this libary. See its main.rs for an example of use.

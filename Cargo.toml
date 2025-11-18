@@ -1,9 +1,12 @@
 [package]
-name = "dsd2pcm"
+name = "rdsd2pcm"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-
-[build-dependencies]
-cc = "1.0"
+rand = "0.8"
+flac-codec = "1.2.0"
+dsf = { path = "src/dsf/" }
+dff-meta = "0.1.1"
+id3 = "1.16.3"
+log = { version = "0.4.28", features = ["std"] }
