@@ -124,11 +124,11 @@ impl Rdsd2Pcm {
     }
 
     /// Perform the conversion from DSD to PCM
-    /// * `sender` - Optional channel sender for percentage progress updates.
+    /// * `percent_sender` - Optional channel sender for percentage progress updates.
     /// The receiver should be explicitly dropped when received value is `100.0` (`rdsd2pcm::ONE_HUNDRED_PERCENT`).
     pub fn do_conversion(
         &mut self,
-        sender: Option<mpsc::Sender<f32>>,
+        percent_sender: Option<mpsc::Sender<f32>>,
     ) -> Result<(), Box<dyn Error>> {
         let Some(mut in_ctx) = self.in_ctx.take() else {
             return Err("Input context not initialized".into());
@@ -142,7 +142,7 @@ impl Rdsd2Pcm {
             self.append_rate_suffix,
             self.base_dir.clone(),
         )?;
-        conv_ctx.do_conversion(sender)
+        conv_ctx.do_conversion(percent_sender)
     }
 
     /// Get the input file name (or empty string for stdin)
