@@ -324,9 +324,9 @@ impl InputContext {
             return Err("No readable input file".into());
         };
 
-        debug!(
+        info!(
             "Opening input file: {}",
-            self.in_path.clone().unwrap().to_string_lossy()
+            self.file_name.to_string_lossy()
         );
         debug!(
             "Parent path: {}",

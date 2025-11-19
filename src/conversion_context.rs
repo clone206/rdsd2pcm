@@ -156,12 +156,6 @@ impl ConversionContext {
 
         self.process_blocks(&sender)?;
 
-        if let Some(sender) = sender {
-            // Wait for receiver to drop before continuing
-            while sender.send(ONE_HUNDRED_PERCENT).is_ok() {
-                continue;
-            }
-        }
         let dsp_elapsed = wall_start.elapsed();
 
         debug!("Clipped {} times.", self.out_ctx.clips());
