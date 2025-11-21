@@ -30,19 +30,19 @@ pub struct Rdsd2Pcm {
 
 impl Rdsd2Pcm {
     /// Create a new Rdsd2Pcm conversion context.
-    /// Certain input parameters will be overriden when loading a container file (e.g. .dsf or .dff)
-    /// with `load_input`.
+    /// Certain input parameters will be overriden when 
+    /// loading a container file (e.g. .dsf or .dff)
     /// * `bit_depth` - Output PCM bit depth
     /// * `out_type` - Output type (file or stdout)
     /// * `level_db` - Output level adjustment in dB
     /// * `out_rate` - Output PCM sample rate
     /// * `out_path` - Optional output path
     /// * `dither_type` - Dither type to apply
-    /// * `in_format` - Input DSD format (planar or interleaved). Can be overridden when loading container files.
-    /// * `endianness` - Input DSD endianness. Can be overridden when loading container files.
-    /// * `dsd_rate` - Input DSD sample rate. Can be overridden when loading container files.
-    /// * `in_block_size` - Input DSD block size in bytes. Can be overridden when loading container files.
-    /// * `num_channels` - Number of input channels. Can be overridden when loading container files.
+    /// * `in_format` - Input DSD format (planar or interleaved). Can be overridden when loading container file.
+    /// * `endianness` - Input DSD endianness. Can be overridden when loading container file.
+    /// * `dsd_rate` - Input DSD sample rate. Can be overridden when loading container file.
+    /// * `in_block_size` - Input DSD block size in bytes. Can be overridden when loading container file.
+    /// * `num_channels` - Number of input channels. Can be overridden when loading container file.
     /// * `filt_type` - Filter type to use for conversion
     /// * `append_rate_suffix` - Whether to append the sample rate to output file names and album tags
     /// * `base_dir` - Base directory for output files' relative paths
