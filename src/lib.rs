@@ -20,10 +20,12 @@ use crate::{
     input::InputContext, output::OutputContext,
 };
 
+/// `100.0`
 pub const ONE_HUNDRED_PERCENT: f32 = 100.0;
 /// `["dsf", "dff", "dsd"]`
 pub const DSD_EXTENSIONS: [&str; 3] = ["dsf", "dff", "dsd"];
 
+/// Main Rdsd2Pcm conversion struct
 pub struct Rdsd2Pcm {
     conv_ctx: ConversionContext,
 }
@@ -31,18 +33,18 @@ pub struct Rdsd2Pcm {
 impl Rdsd2Pcm {
     /// Create a new Rdsd2Pcm conversion context.
     /// Certain input parameters will be overriden when 
-    /// loading a container file (e.g. .dsf or .dff)
+    /// loading a container file (a .dsf or .dff file)
     /// * `bit_depth` - Output PCM bit depth
-    /// * `out_type` - Output type (file or stdout)
+    /// * `out_type` - Output type (audio file or stdout)
     /// * `level_db` - Output level adjustment in dB
     /// * `out_rate` - Output PCM sample rate
-    /// * `out_path` - Optional output path
+    /// * `out_path` - Optional output path. Same as input file if None.
     /// * `dither_type` - Dither type to apply
-    /// * `in_format` - Input DSD format (planar or interleaved). Can be overridden when loading container file.
-    /// * `endianness` - Input DSD endianness. Can be overridden when loading container file.
-    /// * `dsd_rate` - Input DSD sample rate. Can be overridden when loading container file.
-    /// * `in_block_size` - Input DSD block size in bytes. Can be overridden when loading container file.
-    /// * `num_channels` - Number of input channels. Can be overridden when loading container file.
+    /// * `in_format` - Input DSD format (planar or interleaved). Will be overridden when loading container file.
+    /// * `endianness` - Input DSD endianness (most significant bit first, or least significant bit first). Will be overridden when loading container file.
+    /// * `dsd_rate` - Input DSD sample rate as a multiple of DSD64 (1, 2, or 4 allowed). Will be overridden when loading container file.
+    /// * `in_block_size` - Input DSD block size in bytes. Will be overridden when loading container file.
+    /// * `num_channels` - Number of input channels. Will be overridden when loading container file.
     /// * `filt_type` - Filter type to use for conversion
     /// * `append_rate_suffix` - Whether to append the sample rate to output file names and album tags
     /// * `base_dir` - Base directory for output files' relative paths
@@ -99,7 +101,6 @@ impl Rdsd2Pcm {
 
     /// Perform the conversion from DSD to PCM
     /// * `percent_sender` - Optional channel sender for percentage progress updates.
-    /// The receiver should be explicitly dropped when received value is `100.0` (`rdsd2pcm::ONE_HUNDRED_PERCENT`).
     pub fn do_conversion(
         &mut self,
         percent_sender: Option<mpsc::Sender<f32>>,
@@ -142,11 +143,15 @@ pub enum DitherType {
     None,
 }
 
+/// Decimation filter type
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum FilterType {
-    /// From the original dsd2pcm c library (only for 352.8kHz output)
+    /// From the original dsd2pcm c library (only for DSD64 to 352.8kHz output)
     Dsd2Pcm,
+    /// Standard windowed sinc lowpass filter with equiripple design.
+    /// Available for all input and output rates supported by the library.
     Equiripple,
+    /// Inverse chebyshev. Only available for DSD128 to 88.2kHz multiples
     Chebyshev,
     /// Copied over from XLD. Only for DSD64 to 88.2kHz multiples
     XLD,
