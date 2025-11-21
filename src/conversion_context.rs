@@ -510,8 +510,8 @@ impl ConversionContext {
             s,
         );
         info!(
-            "DSP speed: {:.2}x, End-to-end: {:.2}x",
-            speed_dsp, speed_total
+            "DSP speed for {}: {:.2}x, End-to-end: {:.2}x",
+            self.file_name(), speed_dsp, speed_total
         );
     }
 
