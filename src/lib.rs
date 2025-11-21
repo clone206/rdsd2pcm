@@ -38,15 +38,15 @@ impl Rdsd2Pcm {
     /// * `out_rate` - Output PCM sample rate
     /// * `out_path` - Optional output path
     /// * `dither_type` - Dither type to apply
-    /// * `in_format` - Input DSD format (planar or interleaved)
-    /// * `endianness` - Input DSD endianness
-    /// * `dsd_rate` - Input DSD sample rate
-    /// * `in_block_size` - Input DSD block size in bytes
-    /// * `num_channels` - Number of input channels
+    /// * `in_format` - Input DSD format (planar or interleaved). Can be overridden when loading container files.
+    /// * `endianness` - Input DSD endianness. Can be overridden when loading container files.
+    /// * `dsd_rate` - Input DSD sample rate. Can be overridden when loading container files.
+    /// * `in_block_size` - Input DSD block size in bytes. Can be overridden when loading container files.
+    /// * `num_channels` - Number of input channels. Can be overridden when loading container files.
     /// * `filt_type` - Filter type to use for conversion
     /// * `append_rate_suffix` - Whether to append the sample rate to output file names and album tags
     /// * `base_dir` - Base directory for output files' relative paths
-    /// * `in_path` - Optional path to input DSD file. .dsd files are considered raw DSD.
+    /// * `in_path` - Optional path to input DSD file. `stdin` assumed if None. .dsd files are considered raw DSD.
     pub fn new(
         bit_depth: i32,
         out_type: OutputType,
