@@ -1,5 +1,5 @@
 # rdsd2pcm
-A pure Rust library for converting DSD to PCM. Logging implemented via log crate. Reads DSD from stdin or file, writes PCM to stdout or file.
+A pure Rust library for converting DSD to PCM. Logging implemented via [log](https://crates.io/crates/log) crate. Reads DSD from stdin or file, writes PCM to stdout or file.
 
 Doc comments are present, so you can see documentation with `cargo doc --open`.
 
