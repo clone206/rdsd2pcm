@@ -20,14 +20,14 @@ use crate::byte_precalc_decimator::bit_reverse_u8;
 use crate::dsd_file::{
     DFF_BLOCK_SIZE, DSD_64_RATE, DsdFile, DsdFileFormat,
 };
-use crate::{Endianness, FmtType, dsd_in};
+use crate::{Endianness, FmtType};
 use log::{debug, error, info};
+use std::convert::{TryFrom, TryInto};
 use std::error::Error;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufReader, IoSliceMut, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::convert::{TryFrom, TryInto};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DsdRate {
@@ -149,8 +149,8 @@ impl DsdInput {
         Ok(ctx)
     }
 
-    pub fn iter(&self) -> Result<DsdInputIterator, Box<dyn Error>> {
-        DsdInputIterator::new(self)
+    pub fn reader(&self) -> Result<DsdReader, Box<dyn Error>> {
+        DsdReader::new(self)
     }
 
     fn get_path_attrs(
@@ -290,7 +290,8 @@ impl DsdInput {
                 // DSD rate from container sample_rate if valid (2.8224MHz → 1, 5.6448MHz → 2)
                 if let Some(sample_rate) = my_dsd.sample_rate() {
                     if sample_rate % DSD_64_RATE == 0 {
-                        self.dsd_rate = (sample_rate / DSD_64_RATE).try_into()?;
+                        self.dsd_rate =
+                            (sample_rate / DSD_64_RATE).try_into()?;
                     } else {
                         // Fallback: keep CLI value (avoid triggering “Invalid DSD rate”)
                         info!(
@@ -321,11 +322,9 @@ impl DsdInput {
     }
 }
 
-pub struct DsdInputIterator {
+pub struct DsdReader {
     std_in: bool,
     bytes_remaining: u64,
-    bytes_read: u64,
-    chan_bits_read: u64,
     channels_num: u32,
     channel_buffers: Vec<Box<[u8]>>,
     block_size: u32,
@@ -337,25 +336,15 @@ pub struct DsdInputIterator {
     file: Option<File>,
     audio_pos: u64,
 }
-impl DsdInputIterator {
-    pub fn chan_bits_read(&self) -> u64 {
-        self.chan_bits_read
-    }
-    pub fn bytes_read(&self) -> u64 {
-        self.bytes_read
-    }
-    pub fn new(
-        dsd_input: &DsdInput,
-    ) -> Result<Self, Box<dyn Error>> {
-        let mut val = DsdInputIterator {
+impl DsdReader {
+    pub fn new(dsd_input: &DsdInput) -> Result<Self, Box<dyn Error>> {
+        let mut val = DsdReader {
             std_in: dsd_input.std_in,
             bytes_remaining: if dsd_input.std_in {
                 dsd_input.block_size as u64 * dsd_input.channels_num as u64
             } else {
                 dsd_input.audio_length
             },
-            bytes_read: 0,
-            chan_bits_read: 0,
             channels_num: dsd_input.channels_num,
             channel_buffers: Vec::new(),
             block_size: 0,
@@ -363,7 +352,11 @@ impl DsdInputIterator {
             frame_size: 0,
             interleaved: dsd_input.interleaved,
             lsbit_first: dsd_input.lsbit_first,
-            dsd_data: vec![0; dsd_input.block_size as usize * dsd_input.channels_num as usize],
+            dsd_data: vec![
+                0;
+                dsd_input.block_size as usize
+                    * dsd_input.channels_num as usize
+            ],
             file: if let Some(file) = &dsd_input.file {
                 Some(file.try_clone()?)
             } else {
@@ -508,8 +501,8 @@ impl DsdInputIterator {
     }
 }
 
-impl Iterator for DsdInputIterator {
-    type Item = Vec<Box<[u8]>>;
+impl Iterator for DsdReader {
+    type Item = (usize, Vec<Box<[u8]>>);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.is_eof() {
@@ -520,11 +513,7 @@ impl Iterator for DsdInputIterator {
                 if !self.std_in {
                     self.bytes_remaining -= read_size as u64;
                 }
-                self.bytes_read += read_size as u64;
-                self.chan_bits_read +=
-                    (read_size / self.channels_num as usize) as u64 * 8;
-
-                return Some(self.channel_buffers.clone());
+                return Some((read_size, self.channel_buffers.clone()));
             }
             Err(e) => {
                 if let Some(io_err) = e.downcast_ref::<io::Error>()
@@ -538,4 +527,3 @@ impl Iterator for DsdInputIterator {
         }
     }
 }
-

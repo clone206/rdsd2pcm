@@ -23,7 +23,6 @@ use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::byte_precalc_decimator::select_precalc_taps;
 use crate::dsd_file::DSD_64_RATE;
 use crate::dsd_in::DsdInput;
-use crate::dsd_in::DsdInputIterator;
 use crate::lm_resampler::LMResampler;
 use crate::lm_resampler::compute_decim_and_upsample;
 use crate::pcm_out::PcmOutput;
@@ -53,9 +52,17 @@ pub struct ConversionContext {
     diag_expected_frames_floor: u64,
     diag_frames_out: u64,
     base_dir: PathBuf,
+    bytes_read: u64,
+    chan_bits_read: u64,
 }
 
 impl ConversionContext {
+    pub fn chan_bits_read(&self) -> u64 {
+        self.chan_bits_read
+    }
+    pub fn bytes_read(&self) -> u64 {
+        self.bytes_read
+    }
     pub fn file_name(&self) -> String {
         self.dsd_input.file_name().to_string_lossy().into_owned()
     }
@@ -92,6 +99,8 @@ impl ConversionContext {
             diag_expected_frames_floor: 0,
             diag_frames_out: 0,
             base_dir,
+            bytes_read: 0,
+            chan_bits_read: 0,
         };
 
         ctx.setup_resamplers()?;
@@ -100,6 +109,12 @@ impl ConversionContext {
 
         debug!("Dither type: {:#?}", ctx.pcm_out.dither().dither_type());
         Ok(ctx)
+    }
+
+    pub fn inc_bytes_read(&mut self, read_size: usize) {
+        self.bytes_read += read_size as u64;
+        self.chan_bits_read +=
+            (read_size as u64 / self.dsd_input.channels_num() as u64) * 8;
     }
 
     fn setup_resamplers(&mut self) -> Result<(), Box<dyn Error>> {
@@ -161,7 +176,7 @@ impl ConversionContext {
         self.check_conv()?;
         let wall_start = Instant::now();
 
-        let iter = self.process_blocks(&sender)?;
+        self.process_blocks(&sender)?;
 
         let dsp_elapsed = wall_start.elapsed();
 
@@ -174,9 +189,9 @@ impl ConversionContext {
         }
         let total_elapsed = wall_start.elapsed();
 
-        self.report_timing(iter.bytes_read(), dsp_elapsed, total_elapsed);
+        self.report_timing(dsp_elapsed, total_elapsed);
 
-        self.report_in_out(iter.chan_bits_read());
+        self.report_in_out();
 
         Ok(())
     }
@@ -184,50 +199,45 @@ impl ConversionContext {
     fn process_blocks(
         &mut self,
         sender: &Option<mpsc::Sender<f32>>,
-    ) -> Result<DsdInputIterator, Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error>> {
         let channels_num = self.dsd_input.channels_num() as usize;
-        let mut iter = self.dsd_input.iter()?;
+        let reader = self.dsd_input.reader()?;
 
-        while let Some(chan_bufs) = iter.next() {
+        for (read_size, chan_bufs) in reader {
             let mut samples_used_per_chan = 0usize;
             for chan in 0..channels_num {
-                let chan_bytes: Vec<u8> = chan_bufs[chan].to_vec();
                 samples_used_per_chan =
-                    self.process_channel(chan, chan_bytes)?;
+                    self.process_channel(chan, &chan_bufs[chan])?;
                 self.pcm_out.write_to_buffer(samples_used_per_chan, chan);
             }
-            let pcm_frame_bytes = self.track_io(
-                iter.chan_bits_read(),
-                iter.bytes_read(),
-                samples_used_per_chan,
-                sender,
-            );
+            let pcm_frame_bytes =
+                self.track_io(read_size, samples_used_per_chan, sender);
             if self.pcm_out.output() == OutputType::Stdout
                 && pcm_frame_bytes > 0
             {
                 self.pcm_out.write_stdout(pcm_frame_bytes)?;
             }
         }
-        Ok(iter)
+        Ok(())
     }
 
     /// Collect and send diagnostic info about input/output progress
     fn track_io(
         &mut self,
-        chan_bits_read: u64,
-        bytes_read: u64,
+        read_size: usize,
         samples_used_per_chan: usize,
         sender: &Option<mpsc::Sender<f32>>,
     ) -> usize {
-        self.diag_expected_frames_floor = (chan_bits_read
-            * self.upsample_ratio as u64)
-            / self.decim_ratio as u64;
+        self.inc_bytes_read(read_size);
+        self.diag_expected_frames_floor =
+            (self.chan_bits_read() * self.upsample_ratio as u64)
+                / self.decim_ratio as u64;
         self.diag_frames_out += samples_used_per_chan as u64;
 
         if let Some(sender) = sender {
             for i in 0..=RETRIES {
                 match sender.send(
-                    (bytes_read as f32
+                    (self.bytes_read() as f32
                         / self.dsd_input.audio_length() as f32)
                         * ONE_HUNDRED_PERCENT,
                 ) {
@@ -256,7 +266,7 @@ impl ConversionContext {
     fn process_channel(
         &mut self,
         chan: usize,
-        chan_bytes: Vec<u8>,
+        chan_bytes: &[u8],
     ) -> Result<usize, Box<dyn Error>> {
         if let Some(resamps) = self.eq_lm_resamplers.as_mut() {
             // LM path: use rational resampler, honor actual produced count
@@ -508,16 +518,15 @@ impl ConversionContext {
     // Report timing & speed
     fn report_timing(
         &self,
-        bytes_read: u64,
         dsp_elapsed: std::time::Duration,
         total_elapsed: std::time::Duration,
     ) {
-        if bytes_read == 0 {
+        if self.chan_bits_read() == 0 {
             return;
         }
         let channels = self.dsd_input.channels_num() as u64;
         // Bytes per channel
-        let bytes_per_chan = bytes_read / channels;
+        let bytes_per_chan = self.bytes_read() / channels;
         let bits_per_chan = bytes_per_chan * 8;
         let dsd_base_rate =
             (DSD_64_RATE as u64) * (self.dsd_input.dsd_rate() as u64); // samples/sec per channel
@@ -537,7 +546,7 @@ impl ConversionContext {
         let s = total_secs % 60;
         debug!(
             "{} bytes processed in {:02}:{:02}:{:02}",
-            bytes_read,
+            self.bytes_read(),
             h,
             m,
             s,
@@ -551,7 +560,7 @@ impl ConversionContext {
     }
 
     // ---- Diagnostics: expected vs actual output length (verbose only) ----
-    fn report_in_out(&self, chan_bits_read: u64) {
+    fn report_in_out(&self) {
         trace!("Detailed output length diagnostics:");
         let ch = self.dsd_input.channels_num().max(1) as u64;
         let bps = self.pcm_out.bytes_per_sample() as u64;
@@ -571,7 +580,7 @@ impl ConversionContext {
         trace!("Output length accounting:");
         trace!(
             "DSD bits in per channel: {}  L={}  M={}",
-            chan_bits_read,
+            self.chan_bits_read(),
             self.upsample_ratio,
             self.decim_ratio
         );
