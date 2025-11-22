@@ -27,15 +27,15 @@ mod dither;
 mod dsd_file;
 mod filters;
 mod filters_lm;
-mod dsd_in;
+mod dsd_reader;
 mod lm_resampler;
-mod pcm_out;
+mod pcm_writer;
 
 use std::{error::Error, fs, io, path::PathBuf, sync::mpsc};
 
 use crate::{
     conversion_context::ConversionContext, dither::Dither,
-    dsd_in::{DsdInput, DsdRate}, pcm_out::PcmOutput,
+    dsd_reader::{DsdReader, DsdRate}, pcm_writer::PcmWriter,
 };
 
 /// `100.0`
@@ -60,7 +60,7 @@ impl Rdsd2Pcm {
     /// * `dither_type` - Dither type to apply
     /// * `in_format` - Input DSD format (planar or interleaved). Will be overridden when loading container file.
     /// * `endianness` - Input DSD endianness (most significant bit first, or least significant bit first). Will be overridden when loading container file.
-    /// * `dsd_rate` - Input DSD sample rate (Dsd64, Dsd128, or Dsd256 allowed). Will be overridden when loading container file.
+    /// * `dsd_rate` - Input DSD sample rate (DSD64, DSD128, or DSD256 allowed). Will be overridden when loading container file.
     /// * `in_block_size` - Input DSD block size in bytes. Will be overridden when loading container file.
     /// * `num_channels` - Number of input channels. Will be overridden when loading container file.
     /// * `filt_type` - Filter type to use for conversion
@@ -84,7 +84,7 @@ impl Rdsd2Pcm {
         base_dir: PathBuf,
         in_path: Option<PathBuf>,
     ) -> Result<Self, Box<dyn Error>> {
-        let out_ctx = PcmOutput::new(
+        let out_ctx = PcmWriter::new(
             bit_depth,
             out_type,
             level_db,
@@ -93,7 +93,7 @@ impl Rdsd2Pcm {
             Dither::new(dither_type)?,
         )?;
 
-        let in_ctx = DsdInput::new(
+        let in_ctx = DsdReader::new(
             in_path.clone(),
             in_format,
             endianness,

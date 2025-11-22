@@ -21,28 +21,30 @@ use crate::dsd_file::{
     DFF_BLOCK_SIZE, DSD_64_RATE, DsdFile, DsdFileFormat,
 };
 use crate::{Endianness, FmtType};
-use log::{debug, error, info};
+use log::{debug, error, info, trace, warn};
 use std::convert::{TryFrom, TryInto};
 use std::error::Error;
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{self, BufReader, IoSliceMut, Read, Seek, SeekFrom};
+use std::io::{self, BufReader, ErrorKind, IoSliceMut, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+
+const RETRIES: usize = 1; // Max retries for progress send
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DsdRate {
-    Dsd64 = 1,
-    Dsd128 = 2,
-    Dsd256 = 4,
+    DSD64 = 1,
+    DSD128 = 2,
+    DSD256 = 4,
 }
 
 impl TryFrom<u32> for DsdRate {
     type Error = &'static str;
     fn try_from(v: u32) -> Result<Self, Self::Error> {
         match v {
-            1 => Ok(DsdRate::Dsd64),
-            2 => Ok(DsdRate::Dsd128),
-            4 => Ok(DsdRate::Dsd256),
+            1 => Ok(DsdRate::DSD64),
+            2 => Ok(DsdRate::DSD128),
+            4 => Ok(DsdRate::DSD256),
             _ => Err("Invalid DSD rate multiplier (expected 1,2,4)"),
         }
     }
@@ -55,7 +57,7 @@ struct InputPathAttrs {
     file_name: OsString,
 }
 
-pub struct DsdInput {
+pub struct DsdReader {
     dsd_rate: DsdRate,
     channels_num: u32,
     std_in: bool,
@@ -72,7 +74,7 @@ pub struct DsdInput {
     file_format: Option<DsdFileFormat>,
 }
 
-impl DsdInput {
+impl DsdReader {
     pub fn dsd_rate(&self) -> i32 {
         self.dsd_rate as i32
     }
@@ -142,15 +144,16 @@ impl DsdInput {
             file_format: path_attrs.file_format,
         };
 
-        debug!("Set block_size={}", ctx.block_size,);
+        debug!("Set block_size={}", ctx.block_size);
 
         ctx.init()?;
 
         Ok(ctx)
     }
 
-    pub fn reader(&self) -> Result<DsdReader, Box<dyn Error>> {
-        DsdReader::new(self)
+    /// Construct and return instance of DsdIter for reading DSD data frames.
+    pub fn reader(&self) -> Result<DsdIter, Box<dyn Error>> {
+        DsdIter::new(self)
     }
 
     fn get_path_attrs(
@@ -274,12 +277,13 @@ impl DsdInput {
                     DsdFileFormat::Raw => {}
                 }
 
-                // Block size from container. Recompute stride/offset.
+                // Block size from container.
                 // For dff, which always has a block size per channel of 1,
-                // we accept the user-supplied or default block size and calculate
-                // the stride accordingly. For DSF, we treat the block size as
-                // representing the block size per channel and override any user
-                // supplied or default values for block size.
+                // we accept the user-supplied or default block size, which really
+                // just governs how many bytes we read at a time. 
+                // For DSF, we treat the block size as representing the 
+                // block size per channel and override any user-supplied 
+                // or default values for block size.
                 if let Some(block_size) = my_dsd.block_size()
                     && block_size > DFF_BLOCK_SIZE
                 {
@@ -323,7 +327,7 @@ impl DsdInput {
 }
 
 /// DSD data reader that yields frames of DSD data per channel.
-pub struct DsdReader {
+pub struct DsdIter {
     std_in: bool,
     bytes_remaining: u64,
     channels_num: u32,
@@ -336,10 +340,11 @@ pub struct DsdReader {
     dsd_data: Vec<u8>,
     file: Option<File>,
     audio_pos: u64,
+    retries: usize,
 }
-impl DsdReader {
-    pub fn new(dsd_input: &DsdInput) -> Result<Self, Box<dyn Error>> {
-        let mut val = DsdReader {
+impl DsdIter {
+    pub fn new(dsd_input: &DsdReader) -> Result<Self, Box<dyn Error>> {
+        let mut val = DsdIter {
             std_in: dsd_input.std_in,
             bytes_remaining: if dsd_input.std_in {
                 dsd_input.block_size as u64 * dsd_input.channels_num as u64
@@ -364,6 +369,7 @@ impl DsdReader {
                 None
             },
             audio_pos: dsd_input.audio_pos,
+            retries: 0,
         };
         val.set_block_size(dsd_input.block_size, false);
         val.set_reader()?;
@@ -393,6 +399,7 @@ impl DsdReader {
             }
             Ok(self.frame_size as usize)
         } else {
+            self.reset_buffers();
             let mut local_buffs_vec: Vec<IoSliceMut> = self
                 .channel_buffers
                 .iter_mut()
@@ -451,12 +458,20 @@ impl DsdReader {
 
         self.channel_buffers = (0..self.channels_num as usize)
             .map(|_| {
-                vec![0u8; self.block_size as usize].into_boxed_slice()
+                vec![0x69u8; self.block_size as usize].into_boxed_slice()
             })
             .collect();
 
         if !silent {
             debug!("Set block_size={}", self.block_size,);
+        }
+    }
+
+    fn reset_buffers(&mut self) {
+        for chan in 0..self.channels_num as usize {
+            for byte in self.channel_buffers[chan].iter_mut() {
+                *byte = 0x69u8;
+            }
         }
     }
 
@@ -502,7 +517,7 @@ impl DsdReader {
     }
 }
 
-impl Iterator for DsdReader {
+impl Iterator for DsdIter {
     type Item = (usize, Vec<Box<[u8]>>);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -511,6 +526,7 @@ impl Iterator for DsdReader {
         }
         match self.load_frame() {
             Ok(read_size) => {
+                self.retries = 0;
                 if !self.std_in {
                     self.bytes_remaining -= read_size as u64;
                 }
@@ -518,9 +534,22 @@ impl Iterator for DsdReader {
             }
             Err(e) => {
                 if let Some(io_err) = e.downcast_ref::<io::Error>()
-                    && io_err.kind() == io::ErrorKind::UnexpectedEof
                 {
-                    return None;
+                    match io_err.kind() {
+                        ErrorKind::Interrupted => {
+                            if self.retries < RETRIES {
+                                warn!("I/O interrupted, retrying read.");
+                                self.retries += 1;
+                                return self.next();
+                            } else {
+                                error!("Max retries reached for interrupted I/O.");
+                                return None;
+                            }
+                        }
+                        _ => {
+                            return None;
+                        }
+                    }
                 }
                 error!("Error reading DSD frame: {}", e);
                 return None;

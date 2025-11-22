@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::{io, vec};
 use log::{info, debug};
 
-pub struct PcmOutput {
+pub struct PcmWriter {
     float_data: Vec<f64>,
     scale_factor: f64,
     bits: i32,
@@ -48,7 +48,7 @@ pub struct PcmOutput {
     pictures: Vec<Picture>,
 }
 
-impl PcmOutput {
+impl PcmWriter {
     pub fn rate(&self) -> i32 {
         self.rate
     }
@@ -148,7 +148,7 @@ impl PcmOutput {
         &mut self,
         out_frames_capacity: usize,
         channels_num: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) {
         self.channels_num = channels_num;
         self.float_data = vec![0.0; out_frames_capacity];
         self.clips = 0;
@@ -163,7 +163,7 @@ impl PcmOutput {
                     * self.channels_num as usize
                     * self.bytes_per_sample as usize
             ];
-            return Ok(());
+            return;
         }
         // Clear for each new output
         self.vorbis = None;
@@ -176,7 +176,6 @@ impl PcmOutput {
             self.int_file = Some(AudioFile::new());
             self.set_file_params_int();
         }
-        Ok(())
     }
 
     fn add_picture(&mut self, pic: Picture) {
@@ -502,7 +501,7 @@ impl PcmOutput {
     }
 }
 
-impl Clone for PcmOutput {
+impl Clone for PcmWriter {
     fn clone(&self) -> Self {
         Self {
             bits: self.bits,

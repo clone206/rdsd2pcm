@@ -22,10 +22,10 @@ use crate::OutputType;
 use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::byte_precalc_decimator::select_precalc_taps;
 use crate::dsd_file::DSD_64_RATE;
-use crate::dsd_in::DsdInput;
+use crate::dsd_reader::DsdReader;
 use crate::lm_resampler::LMResampler;
 use crate::lm_resampler::compute_decim_and_upsample;
-use crate::pcm_out::PcmOutput;
+use crate::pcm_writer::PcmWriter;
 use id3::TagLike;
 use log::error;
 use log::warn;
@@ -41,8 +41,8 @@ use std::time::Instant;
 const RETRIES: usize = 1; // Max retries for progress send
 
 pub struct ConversionContext {
-    dsd_input: DsdInput,
-    pcm_out: PcmOutput,
+    dsd_reader: DsdReader,
+    pcm_writer: PcmWriter,
     filt_type: FilterType,
     append_rate_suffix: bool,
     precalc_decims: Option<Vec<BytePrecalcDecimator>>,
@@ -55,7 +55,6 @@ pub struct ConversionContext {
     bytes_read: u64,
     chan_bits_read: u64,
 }
-
 impl ConversionContext {
     pub fn chan_bits_read(&self) -> u64 {
         self.chan_bits_read
@@ -64,19 +63,21 @@ impl ConversionContext {
         self.bytes_read
     }
     pub fn file_name(&self) -> String {
-        self.dsd_input.file_name().to_string_lossy().into_owned()
+        self.dsd_reader.file_name().to_string_lossy().into_owned()
     }
 
     pub fn new(
-        in_ctx: DsdInput,
-        out_ctx: PcmOutput,
+        dsd_reader: DsdReader,
+        pcm_writer: PcmWriter,
         filt_type: FilterType,
         append_rate_suffix: bool,
         base_dir: PathBuf,
     ) -> Result<Self, Box<dyn Error>> {
-        let dsd_bytes_per_chan = in_ctx.block_size() as usize;
-        let (decim_ratio, upsample_ratio) =
-            compute_decim_and_upsample(in_ctx.dsd_rate(), out_ctx.rate());
+        let dsd_bytes_per_chan = dsd_reader.block_size() as usize;
+        let (decim_ratio, upsample_ratio) = compute_decim_and_upsample(
+            dsd_reader.dsd_rate(),
+            pcm_writer.rate(),
+        );
 
         // Worst-case frames per channel per input block:
         // ceil((bits_in * L) / M). Add small slack for LM paths to avoid edge truncation.
@@ -88,8 +89,8 @@ impl ConversionContext {
         let out_frames_capacity = frames_max + lm_slack;
 
         let mut ctx = Self {
-            dsd_input: in_ctx,
-            pcm_out: out_ctx,
+            dsd_reader,
+            pcm_writer,
             filt_type,
             append_rate_suffix,
             precalc_decims: None,
@@ -104,44 +105,48 @@ impl ConversionContext {
         };
 
         ctx.setup_resamplers()?;
-        ctx.pcm_out
-            .init(out_frames_capacity, ctx.dsd_input.channels_num())?;
+        ctx.pcm_writer
+            .init(out_frames_capacity, ctx.dsd_reader.channels_num());
 
-        debug!("Dither type: {:#?}", ctx.pcm_out.dither().dither_type());
+        debug!(
+            "Dither type: {:#?}",
+            ctx.pcm_writer.dither().dither_type()
+        );
         Ok(ctx)
     }
 
-    pub fn inc_bytes_read(&mut self, read_size: usize) {
+    fn inc_bytes_read(&mut self, read_size: usize) {
         self.bytes_read += read_size as u64;
         self.chan_bits_read +=
-            (read_size as u64 / self.dsd_input.channels_num() as u64) * 8;
+            (read_size as u64 / self.dsd_reader.channels_num() as u64) * 8;
     }
 
     fn setup_resamplers(&mut self) -> Result<(), Box<dyn Error>> {
         if self.upsample_ratio > 1 {
-            let mut resamplers =
-                Vec::with_capacity(self.dsd_input.channels_num() as usize);
-            for _ in 0..self.dsd_input.channels_num() {
+            let mut resamplers = Vec::with_capacity(
+                self.dsd_reader.channels_num() as usize,
+            );
+            for _ in 0..self.dsd_reader.channels_num() {
                 resamplers.push(LMResampler::new(
                     self.upsample_ratio,
                     self.decim_ratio,
-                    self.pcm_out.rate() as u32,
+                    self.pcm_writer.rate() as u32,
                 )?);
             }
             self.eq_lm_resamplers = Some(resamplers);
-            self.pcm_out.update_scaling_lm(self.upsample_ratio);
+            self.pcm_writer.update_scaling_lm(self.upsample_ratio);
             trace!(
                 "L/M path makeup gain: ×{} (scale_factor now {:.6})",
                 self.upsample_ratio,
-                self.pcm_out.scale_factor()
+                self.pcm_writer.scale_factor()
             );
         } else if let Some(taps) = select_precalc_taps(
             self.filt_type,
-            self.dsd_input.dsd_rate(),
+            self.dsd_reader.dsd_rate(),
             self.decim_ratio,
         ) {
             self.precalc_decims = Some(
-                (0..self.dsd_input.channels_num())
+                (0..self.dsd_reader.channels_num())
                     .map(|_| {
                         BytePrecalcDecimator::new(
                             taps,
@@ -155,14 +160,14 @@ impl ConversionContext {
                 "Precalc decimator enabled (ratio {}:1, filter '{:#?}', dsd_rate {}).",
                 self.decim_ratio,
                 self.filt_type,
-                self.dsd_input.dsd_rate()
+                self.dsd_reader.dsd_rate()
             );
         } else {
             return Err(format!(
                 "Taps not found for ratio {} / filter '{:#?}' (dsd_rate {}). ",
                 self.decim_ratio,
                 self.filt_type,
-                self.dsd_input.dsd_rate()
+                self.dsd_reader.dsd_rate()
             )
             .into());
         }
@@ -180,9 +185,13 @@ impl ConversionContext {
 
         let dsp_elapsed = wall_start.elapsed();
 
-        debug!("Clipped {} times.", self.pcm_out.clips());
+        info!(
+            "{} clipped {} times.",
+            self.file_name(),
+            self.pcm_writer.clips()
+        );
 
-        if self.pcm_out.output() != OutputType::Stdout
+        if self.pcm_writer.output() != OutputType::Stdout
             && let Err(e) = self.write_file()
         {
             error!("Error writing file: {e}");
@@ -190,7 +199,6 @@ impl ConversionContext {
         let total_elapsed = wall_start.elapsed();
 
         self.report_timing(dsp_elapsed, total_elapsed);
-
         self.report_in_out();
 
         Ok(())
@@ -200,22 +208,23 @@ impl ConversionContext {
         &mut self,
         sender: &Option<mpsc::Sender<f32>>,
     ) -> Result<(), Box<dyn Error>> {
-        let channels_num = self.dsd_input.channels_num() as usize;
-        let reader = self.dsd_input.reader()?;
+        let channels_num = self.dsd_reader.channels_num() as usize;
+        let reader = self.dsd_reader.reader()?;
 
         for (read_size, chan_bufs) in reader {
             let mut samples_used_per_chan = 0usize;
             for chan in 0..channels_num {
                 samples_used_per_chan =
                     self.process_channel(chan, &chan_bufs[chan])?;
-                self.pcm_out.write_to_buffer(samples_used_per_chan, chan);
+                self.pcm_writer
+                    .write_to_buffer(samples_used_per_chan, chan);
             }
             let pcm_frame_bytes =
                 self.track_io(read_size, samples_used_per_chan, sender);
-            if self.pcm_out.output() == OutputType::Stdout
+            if self.pcm_writer.output() == OutputType::Stdout
                 && pcm_frame_bytes > 0
             {
-                self.pcm_out.write_stdout(pcm_frame_bytes)?;
+                self.pcm_writer.write_stdout(pcm_frame_bytes)?;
             }
         }
         Ok(())
@@ -229,16 +238,16 @@ impl ConversionContext {
         sender: &Option<mpsc::Sender<f32>>,
     ) -> usize {
         self.inc_bytes_read(read_size);
-        self.diag_expected_frames_floor =
-            (self.chan_bits_read() * self.upsample_ratio as u64)
-                / self.decim_ratio as u64;
+        self.diag_expected_frames_floor = (self.chan_bits_read()
+            * self.upsample_ratio as u64)
+            / self.decim_ratio as u64;
         self.diag_frames_out += samples_used_per_chan as u64;
 
         if let Some(sender) = sender {
             for i in 0..=RETRIES {
                 match sender.send(
                     (self.bytes_read() as f32
-                        / self.dsd_input.audio_length() as f32)
+                        / self.dsd_reader.audio_length() as f32)
                         * ONE_HUNDRED_PERCENT,
                 ) {
                     Ok(_) => break,
@@ -256,8 +265,8 @@ impl ConversionContext {
             }
         }
         return samples_used_per_chan
-            * self.pcm_out.channels_num() as usize
-            * self.pcm_out.bytes_per_sample() as usize;
+            * self.pcm_writer.channels_num() as usize
+            * self.pcm_writer.bytes_per_sample() as usize;
     }
 
     // Unified per-channel processing: handles both LM (rational) and integer paths.
@@ -273,14 +282,14 @@ impl ConversionContext {
             let rs = &mut resamps[chan];
             return Ok(rs.process_bytes_lm(
                 &chan_bytes,
-                self.pcm_out.float_data_mut(),
+                self.pcm_writer.float_data_mut(),
             ));
         } else if let Some(ref mut v) = self.precalc_decims {
             // Integer path: use precalc decimator; conventionally return the estimate
             let dec = &mut v[chan];
             return Ok(dec.process_bytes(
                 &chan_bytes,
-                self.pcm_out.float_data_mut(),
+                self.pcm_writer.float_data_mut(),
             ));
         } else {
             return Err("No resampler or decimator initialized.".into());
@@ -288,14 +297,14 @@ impl ConversionContext {
     }
 
     fn get_out_filename_path(&self) -> PathBuf {
-        let ext = match self.pcm_out.output() {
+        let ext = match self.pcm_writer.output() {
             OutputType::Wav => "wav",
             OutputType::Aiff => "aif",
             OutputType::Flac => "flac",
             _ => "out",
         };
         let suffix = if let Some((uscore, _dot)) =
-            self.abbrev_rate_pair(self.pcm_out.rate() as u32)
+            self.abbrev_rate_pair(self.pcm_writer.rate() as u32)
         {
             format!("_{}", uscore)
         } else {
@@ -304,7 +313,7 @@ impl ConversionContext {
 
         let mut filename: OsString = OsString::new();
 
-        if self.dsd_input.std_in() {
+        if self.dsd_reader.std_in() {
             filename.push("output");
             if !suffix.is_empty() {
                 filename.push(suffix);
@@ -314,7 +323,7 @@ impl ConversionContext {
         }
 
         filename.push(
-            self.dsd_input
+            self.dsd_reader
                 .in_path()
                 .clone()
                 .and_then(|p| {
@@ -337,8 +346,8 @@ impl ConversionContext {
         &self,
         parent: &Path,
     ) -> Result<PathBuf, Box<dyn Error>> {
-        if let Some(out_dir) = self.pcm_out.path() {
-            if self.dsd_input.std_in() {
+        if let Some(out_dir) = self.pcm_writer.path() {
+            if self.dsd_reader.std_in() {
                 return Ok(out_dir.clone());
             }
             let rel =
@@ -349,7 +358,7 @@ impl ConversionContext {
                 std::fs::create_dir_all(&full_dir)?;
             }
             Ok(full_dir)
-        } else if self.dsd_input.std_in() {
+        } else if self.dsd_reader.std_in() {
             Ok(PathBuf::from(""))
         } else {
             Ok(parent.to_path_buf())
@@ -361,7 +370,7 @@ impl ConversionContext {
         source_dir: &Path,
         destination_dir: &Path,
     ) -> Result<(u32, u32), Box<dyn std::error::Error>> {
-        if self.pcm_out.path().is_none() || self.dsd_input.std_in() {
+        if self.pcm_writer.path().is_none() || self.dsd_reader.std_in() {
             return Ok((0, 0));
         }
         let mut copied: u32 = 0;
@@ -416,7 +425,7 @@ impl ConversionContext {
         debug!("Saving to file...");
 
         let parent = self
-            .dsd_input
+            .dsd_reader
             .parent_path()
             .as_ref()
             .map(|p| p.as_path())
@@ -444,26 +453,26 @@ impl ConversionContext {
             }
         }
 
-        if let Some(mut tag) = self.dsd_input.tag().as_ref().cloned() {
+        if let Some(mut tag) = self.dsd_reader.tag().as_ref().cloned() {
             // If -a/--append was requested and an album tag exists, append " [<Sample Rate>]" (dot-delimited) to album
             if self.append_rate_suffix {
                 self.append_album_suffix(&mut tag);
             }
 
-            if self.pcm_out.output() == OutputType::Flac {
+            if self.pcm_writer.output() == OutputType::Flac {
                 debug!("Preparing Vorbis Comment for FLAC...");
-                self.pcm_out.id3_to_flac_meta(&tag);
+                self.pcm_writer.id3_to_flac_meta(&tag);
             }
-            self.pcm_out.save_file(&out_path)?;
+            self.pcm_writer.save_file(&out_path)?;
 
-            if self.pcm_out.output() != OutputType::Flac {
+            if self.pcm_writer.output() != OutputType::Flac {
                 // Write ID3 tags directly
                 debug!("Writing ID3 tags to file.");
                 tag.write_to_path(&out_path, tag.version())?;
             }
         } else {
             debug!("Input file has no tag; skipping tag copy.");
-            self.pcm_out.save_file(&out_path)?;
+            self.pcm_writer.save_file(&out_path)?;
         }
 
         Ok(())
@@ -472,7 +481,7 @@ impl ConversionContext {
     fn append_album_suffix(&self, tag: &mut id3::Tag) {
         if let Some(album) = tag.album() {
             if let Some((_uscore, dot)) =
-                self.abbrev_rate_pair(self.pcm_out.rate() as u32)
+                self.abbrev_rate_pair(self.pcm_writer.rate() as u32)
             {
                 let mut new_album = String::from(album);
                 new_album.push_str(&format!(" [{}]", dot));
@@ -501,7 +510,7 @@ impl ConversionContext {
     }
 
     fn check_conv(&self) -> Result<(), Box<dyn Error>> {
-        if let Some(path) = &self.dsd_input.in_path()
+        if let Some(path) = &self.dsd_reader.in_path()
             && !path.canonicalize()?.starts_with(&self.base_dir)
         {
             return Err(format!(
@@ -521,15 +530,15 @@ impl ConversionContext {
         dsp_elapsed: std::time::Duration,
         total_elapsed: std::time::Duration,
     ) {
-        if self.chan_bits_read() == 0 {
+        if self.bytes_read() == 0 {
             return;
         }
-        let channels = self.dsd_input.channels_num() as u64;
+        let channels = self.dsd_reader.channels_num() as u64;
         // Bytes per channel
         let bytes_per_chan = self.bytes_read() / channels;
         let bits_per_chan = bytes_per_chan * 8;
         let dsd_base_rate =
-            (DSD_64_RATE as u64) * (self.dsd_input.dsd_rate() as u64); // samples/sec per channel
+            (DSD_64_RATE as u64) * (self.dsd_reader.dsd_rate() as u64); // samples/sec per channel
         let audio_seconds = if dsd_base_rate > 0 {
             (bits_per_chan as f64) / (dsd_base_rate as f64)
         } else {
@@ -562,8 +571,8 @@ impl ConversionContext {
     // ---- Diagnostics: expected vs actual output length (verbose only) ----
     fn report_in_out(&self) {
         trace!("Detailed output length diagnostics:");
-        let ch = self.dsd_input.channels_num().max(1) as u64;
-        let bps = self.pcm_out.bytes_per_sample() as u64;
+        let ch = self.dsd_reader.channels_num().max(1) as u64;
+        let bps = self.pcm_writer.bytes_per_sample() as u64;
         let expected_frames = self.diag_expected_frames_floor;
         let actual_frames = self.diag_frames_out;
         // Estimate latency (frames not emitted at start) for rational path
