@@ -6,7 +6,7 @@ mod audio_file;
 mod byte_precalc_decimator;
 mod conversion_context;
 mod dither;
-mod dsd;
+mod dsd_file;
 mod filters;
 mod filters_lm;
 mod input;

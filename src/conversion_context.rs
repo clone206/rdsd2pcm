@@ -21,7 +21,7 @@ use crate::ONE_HUNDRED_PERCENT;
 use crate::OutputType;
 use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::byte_precalc_decimator::select_precalc_taps;
-use crate::dsd::DSD_64_RATE;
+use crate::dsd_file::DSD_64_RATE;
 use crate::input::InputContext;
 use crate::lm_resampler::LMResampler;
 use crate::lm_resampler::compute_decim_and_upsample;

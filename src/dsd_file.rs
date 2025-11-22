@@ -34,6 +34,8 @@ pub enum DsdFileFormat {
 pub const DSD_64_RATE: u32 = 2822400;
 pub const DFF_BLOCK_SIZE: u32 = 1;
 pub const DSF_BLOCK_SIZE: u32 = 4096;
+/// The offset in bytes of the sample data within a DSF file.
+pub const DSF_SAMPLE_DATA_OFFSET: u64 = 92;
 
 pub struct DsdFile {
     audio_length: u64,
@@ -83,7 +85,7 @@ impl DsdFile {
         if file_format == DsdFileFormat::Dsf {
             use dsf::DsfFile;
             let file_path = Path::new(&path);
-            let mut dsf_file = DsfFile::open(file_path)?;
+            let dsf_file = DsfFile::open(file_path)?;
             if let Some(e) = dsf_file.tag_read_err() {
                 warn!(
                     "Attempted read of ID3 tag failed. Partial read attempted: {}",
@@ -103,7 +105,7 @@ impl DsdFile {
                 block_size: Some(DSF_BLOCK_SIZE), // Should always be this value for DSF
                 audio_length: dsf_file.fmt_chunk().sample_count() / 8
                     * dsf_file.fmt_chunk().channel_num() as u64,
-                audio_pos: dsf_file.frames()?.offset(0)?,
+                audio_pos: DSF_SAMPLE_DATA_OFFSET,
                 file,
                 tag: dsf_file.id3_tag().clone(),
             })
@@ -152,7 +154,7 @@ impl DsdFile {
                 tag: None,
             })
         } else {
-            Err("Unsupported file extension; only .dsf, .dff, and .dsd are supported"
+            Err("Unsupported file extension; only dsf, dff, and raw dsd are supported"
                 .into())
         }
     }

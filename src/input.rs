@@ -17,7 +17,7 @@
 */
 
 use crate::byte_precalc_decimator::bit_reverse_u8;
-use crate::dsd::{DFF_BLOCK_SIZE, DSD_64_RATE, DsdFile, DsdFileFormat};
+use crate::dsd_file::{DFF_BLOCK_SIZE, DSD_64_RATE, DsdFile, DsdFileFormat};
 use crate::{Endianness, FmtType};
 use log::{debug, info};
 use std::error::Error;
