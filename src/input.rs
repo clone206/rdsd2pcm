@@ -466,35 +466,3 @@ impl InputContext {
         Ok(())
     }
 }
-
-impl Clone for InputContext {
-    fn clone(&self) -> Self {
-        Self {
-            dsd_rate: self.dsd_rate,
-            channels_num: self.channels_num,
-            std_in: self.std_in,
-            bytes_processed: self.bytes_processed,
-            tag: self.tag.clone(),
-            file_name: self.file_name.clone(),
-            audio_length: self.audio_length,
-            frame_size: self.frame_size,
-            block_size: self.block_size,
-            parent_path: self.parent_path.clone(),
-            in_path: self.in_path.clone(),
-            lsbit_first: self.lsbit_first,
-            interleaved: self.interleaved,
-            audio_pos: self.audio_pos,
-            reader: Box::new(io::empty()), // Fresh placeholder; reinitialize with set_reader() if needed
-            file: None,                    // File handle not cloned
-            bytes_remaining: self.bytes_remaining,
-            chan_bits_processed: self.chan_bits_processed,
-            dsd_data: vec![
-                0;
-                self.block_size as usize
-                    * self.channels_num as usize
-            ],
-            channel_buffers: Vec::new(), // Buffers not cloned
-            file_format: self.file_format,
-        }
-    }
-}

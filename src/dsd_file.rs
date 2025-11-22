@@ -83,7 +83,7 @@ impl DsdFile {
         file_format: DsdFileFormat,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         if file_format == DsdFileFormat::Dsf {
-            use dsf::DsfFile;
+            use dsf_meta::DsfFile;
             let file_path = Path::new(&path);
             let dsf_file = DsfFile::open(file_path)?;
             if let Some(e) = dsf_file.tag_read_err() {
