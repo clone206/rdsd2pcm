@@ -1,19 +1,19 @@
 /*
  Copyright (c) 2023 clone206
 
- This file is part of dsd2dxd
+ This file is part of rdsd2pcm
 
- dsd2dxd is free software: you can redistribute it and/or modify it
+ rdsd2pcm is free software: you can redistribute it and/or modify it
  under the terms of the GNU General Public License as published by the
  Free Software Foundation, either version 3 of the License, or
  (at your option) any later version.
 
- dsd2dxd is distributed in the hope that it will be useful, but
+ rdsd2pcm is distributed in the hope that it will be useful, but
  WITHOUT ANY WARRANTY; without even the implied warranty of
  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  GNU General Public License for more details.
  You should have received a copy of the GNU General Public License
- along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
+ along with rdsd2pcm. If not, see <https://www.gnu.org/licenses/>.
 */
 
 /*
