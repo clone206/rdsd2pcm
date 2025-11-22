@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::{io, vec};
 use log::{info, debug};
 
-pub struct OutputContext {
+pub struct PcmOutput {
     float_data: Vec<f64>,
     scale_factor: f64,
     bits: i32,
@@ -48,7 +48,7 @@ pub struct OutputContext {
     pictures: Vec<Picture>,
 }
 
-impl OutputContext {
+impl PcmOutput {
     pub fn rate(&self) -> i32 {
         self.rate
     }
@@ -502,7 +502,7 @@ impl OutputContext {
     }
 }
 
-impl Clone for OutputContext {
+impl Clone for PcmOutput {
     fn clone(&self) -> Self {
         Self {
             bits: self.bits,

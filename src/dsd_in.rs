@@ -27,6 +27,26 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufReader, IoSliceMut, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::convert::{TryFrom, TryInto};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DsdRate {
+    Dsd64 = 1,
+    Dsd128 = 2,
+    Dsd256 = 4,
+}
+
+impl TryFrom<u32> for DsdRate {
+    type Error = &'static str;
+    fn try_from(v: u32) -> Result<Self, Self::Error> {
+        match v {
+            1 => Ok(DsdRate::Dsd64),
+            2 => Ok(DsdRate::Dsd128),
+            4 => Ok(DsdRate::Dsd256),
+            _ => Err("Invalid DSD rate multiplier (expected 1,2,4)"),
+        }
+    }
+}
 
 struct InputPathAttrs {
     std_in: bool,
@@ -35,11 +55,11 @@ struct InputPathAttrs {
     file_name: OsString,
 }
 
-pub struct InputContext {
-    dsd_rate: i32,
+pub struct DsdInput {
+    dsd_rate: DsdRate,
     channels_num: u32,
     std_in: bool,
-    bytes_processed: u64,
+    bytes_read: u64,
     tag: Option<id3::Tag>,
     file_name: OsString,
     audio_length: u64,
@@ -53,15 +73,15 @@ pub struct InputContext {
     reader: Box<dyn Read + Send>,
     file: Option<File>,
     bytes_remaining: u64,
-    chan_bits_processed: u64,
+    chan_bits_read: u64,
     dsd_data: Vec<u8>,
     channel_buffers: Vec<Box<[u8]>>,
     file_format: Option<DsdFileFormat>,
 }
 
-impl InputContext {
+impl DsdInput {
     pub fn dsd_rate(&self) -> i32 {
-        self.dsd_rate
+        self.dsd_rate as i32
     }
     pub fn channels_num(&self) -> u32 {
         self.channels_num
@@ -69,8 +89,8 @@ impl InputContext {
     pub fn std_in(&self) -> bool {
         self.std_in
     }
-    pub fn bytes_processed(&self) -> u64 {
-        self.bytes_processed
+    pub fn bytes_read(&self) -> u64 {
+        self.bytes_read
     }
     pub fn tag(&self) -> &Option<id3::Tag> {
         &self.tag
@@ -90,15 +110,15 @@ impl InputContext {
     pub fn in_path(&self) -> &Option<PathBuf> {
         &self.in_path
     }
-    pub fn chan_bits_processed(&self) -> u64 {
-        self.chan_bits_processed
+    pub fn chan_bits_read(&self) -> u64 {
+        self.chan_bits_read
     }
 
     pub fn new(
         in_path: Option<PathBuf>,
         format: FmtType,
         endianness: Endianness,
-        dsd_rate: i32,
+        dsd_rate: DsdRate,
         block_size: u32,
         channels: u32,
     ) -> Result<Self, Box<dyn Error>> {
@@ -115,7 +135,7 @@ impl InputContext {
         let path_attrs = Self::get_path_attrs(&in_path)?;
 
         // Only enforce CLI dsd_rate for stdin or raw inputs
-        if path_attrs.std_in && ![1, 2, 4].contains(&dsd_rate) {
+        if path_attrs.std_in && ![1, 2, 4].contains(&(dsd_rate as u32)) {
             return Err("Unsupported DSD input rate.".into());
         }
 
@@ -136,8 +156,8 @@ impl InputContext {
             reader: Box::new(io::empty()),
             file_name: path_attrs.file_name,
             bytes_remaining: 0,
-            bytes_processed: 0,
-            chan_bits_processed: 0,
+            bytes_read: 0,
+            chan_bits_read: 0,
             dsd_data: Vec::new(),
             channel_buffers: Vec::new(),
             file_format: path_attrs.file_format,
@@ -214,11 +234,9 @@ impl InputContext {
         !self.std_in && self.bytes_remaining <= 0
     }
 
-    /// Read one frame of DSD data into the channel buffers and return.
+    /// Read one frame of DSD data into the channel buffers and return read size.
     #[inline(always)]
-    pub fn read_frame(
-        &mut self,
-    ) -> Result<Vec<Box<[u8]>>, Box<dyn Error>> {
+    pub fn load_frame(&mut self) -> Result<usize, Box<dyn Error>> {
         // stdin always reads frame_size
         if self.bytes_remaining < self.frame_size as u64 && !self.std_in {
             self.set_block_size(
@@ -227,7 +245,7 @@ impl InputContext {
             );
         }
 
-        let read_size = if self.interleaved {
+        if self.interleaved {
             self.reader.read_exact(
                 &mut self.dsd_data[..self.frame_size as usize],
             )?;
@@ -237,7 +255,7 @@ impl InputContext {
                     .get_chan_bytes_interl(chan, self.frame_size as usize);
                 self.channel_buffers[chan].copy_from_slice(&chan_bytes);
             }
-            self.frame_size as usize
+            Ok(self.frame_size as usize)
         } else {
             let mut local_buffs_vec: Vec<IoSliceMut> = self
                 .channel_buffers
@@ -261,17 +279,8 @@ impl InputContext {
                 .iter()
                 .map(|b| b.to_vec().into_boxed_slice())
                 .collect();
-            this_read
-        };
-
-        if !self.std_in {
-            self.bytes_remaining -= read_size as u64;
+            Ok(this_read)
         }
-        self.bytes_processed += read_size as u64;
-        self.chan_bits_processed +=
-            (read_size / self.channels_num as usize) as u64 * 8;
-
-        Ok(self.channel_buffers.clone())
     }
 
     /// Take frame of interleaved DSD bytes from internal buffer and return one
@@ -385,12 +394,12 @@ impl InputContext {
                 // DSD rate from container sample_rate if valid (2.8224MHz → 1, 5.6448MHz → 2)
                 if let Some(sample_rate) = my_dsd.sample_rate() {
                     if sample_rate % DSD_64_RATE == 0 {
-                        self.dsd_rate = (sample_rate / DSD_64_RATE) as i32;
+                        self.dsd_rate = (sample_rate / DSD_64_RATE).try_into()?;
                     } else {
                         // Fallback: keep CLI value (avoid triggering “Invalid DSD rate”)
                         info!(
                             "Container sample_rate {} not standard; keeping CLI dsd_rate={}",
-                            sample_rate, self.dsd_rate
+                            sample_rate, self.dsd_rate as i32
                         );
                     }
                 }
@@ -398,7 +407,7 @@ impl InputContext {
                 debug!("Audio length in bytes: {}", self.audio_length);
                 debug!(
                     "Container: sr={}Hz channels={} interleaved={}",
-                    self.dsd_rate * DSD_64_RATE as i32,
+                    self.dsd_rate as u32 * DSD_64_RATE,
                     self.channels_num,
                     self.interleaved,
                 );
@@ -466,15 +475,24 @@ impl InputContext {
     }
 }
 
-impl Iterator for InputContext {
+impl Iterator for DsdInput {
     type Item = Vec<Box<[u8]>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.is_eof() {
             return None;
         }
-        match self.read_frame() {
-            Ok(buffers) => Some(buffers),
+        match self.load_frame() {
+            Ok(read_size) => {
+                if !self.std_in {
+                    self.bytes_remaining -= read_size as u64;
+                }
+                self.bytes_read += read_size as u64;
+                self.chan_bits_read +=
+                    (read_size / self.channels_num as usize) as u64 * 8;
+
+                return Some(self.channel_buffers.clone());
+            }
             Err(e) => {
                 if let Some(io_err) = e.downcast_ref::<io::Error>()
                     && io_err.kind() == io::ErrorKind::UnexpectedEof
