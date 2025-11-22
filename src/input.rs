@@ -17,9 +17,11 @@
 */
 
 use crate::byte_precalc_decimator::bit_reverse_u8;
-use crate::dsd_file::{DFF_BLOCK_SIZE, DSD_64_RATE, DsdFile, DsdFileFormat};
+use crate::dsd_file::{
+    DFF_BLOCK_SIZE, DSD_64_RATE, DsdFile, DsdFileFormat,
+};
 use crate::{Endianness, FmtType};
-use log::{debug, info};
+use log::{debug, error, info};
 use std::error::Error;
 use std::ffi::OsString;
 use std::fs::File;
@@ -324,10 +326,7 @@ impl InputContext {
             return Err("No readable input file".into());
         };
 
-        info!(
-            "Opening input file: {}",
-            self.file_name.to_string_lossy()
-        );
+        info!("Opening input file: {}", self.file_name.to_string_lossy());
         debug!(
             "Parent path: {}",
             self.parent_path.as_ref().unwrap().display()
@@ -464,5 +463,27 @@ impl InputContext {
             file,
         ));
         Ok(())
+    }
+}
+
+impl Iterator for InputContext {
+    type Item = Vec<Box<[u8]>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.is_eof() {
+            return None;
+        }
+        match self.read_frame() {
+            Ok(buffers) => Some(buffers),
+            Err(e) => {
+                if let Some(io_err) = e.downcast_ref::<io::Error>()
+                    && io_err.kind() == io::ErrorKind::UnexpectedEof
+                {
+                    return None;
+                }
+                error!("Error reading DSD frame: {}", e);
+                return None;
+            }
+        }
     }
 }

@@ -177,42 +177,20 @@ impl ConversionContext {
     }
 
     fn process_blocks(&mut self, sender: &Option<mpsc::Sender<f32>>) -> Result<(), Box<dyn Error>> {
-        loop {
-            // Read one frame identically for stdin and file
-            let chan_bufs = match self.in_ctx.read_frame() {
-                Ok(bufs) => bufs,
-                Err(e) => {
-                    if let Some(io_err) = e.downcast_ref::<io::Error>()
-                        && io_err.kind() == io::ErrorKind::UnexpectedEof
-                    {
-                        break;
-                    }
-                    return Err(e);
-                }
-            };
-
-            // Track actual frames produced per channel (set by channel 0)
+        let channels_num = self.in_ctx.channels_num() as usize;
+        // Drive iterator manually; each next() borrow ends immediately.
+        while let Some(chan_bufs) = self.in_ctx.next() {
             let mut samples_used_per_chan = 0usize;
-
-            // Per-channel processing loop (handles both LM and integer paths)
-            for chan in 0..self.in_ctx.channels_num() as usize {
-                // Scope the immutable borrow so it ends before we mutably borrow `self`.
+            for chan in 0..channels_num {
                 let chan_bytes: Vec<u8> = chan_bufs[chan].to_vec();
                 samples_used_per_chan = self.process_channel(chan, chan_bytes)?;
                 self.out_ctx.write_to_buffer(samples_used_per_chan, chan);
             }
-
-            let pcm_frame_bytes = self.track_io(samples_used_per_chan, &sender);
-
+            let pcm_frame_bytes = self.track_io(samples_used_per_chan, sender);
             if self.out_ctx.output() == OutputType::Stdout && pcm_frame_bytes > 0 {
                 self.out_ctx.write_stdout(pcm_frame_bytes)?;
             }
-
-            if self.in_ctx.is_eof() {
-                break;
-            }
-        } // end loop
-
+        }
         Ok(())
     }
 
