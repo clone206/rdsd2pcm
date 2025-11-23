@@ -408,14 +408,7 @@ impl DsdIter {
             Ok(self.frame_size as usize)
         } else {
             // Planar DSF: Each channel block is fixed size (block_size) and the last
-            // frame may contain zero-padded tail inside each channel block. The spec
-            // pads WITHIN each channel's block, not after all channels. We therefore
-            // must treat trailing zeros inside a channel block as non-audio and avoid
-            // shrinking block_size (which misaligns subsequent channels).
-            // Strategy: If we have a full frame remaining, read block_size bytes per
-            // channel normally. If this is the final partial frame (bytes_remaining
-            // < frame_size), read only the remaining VALID bytes for each channel,
-            // then read & discard any padded zeros to advance the underlying reader.
+            // frame may contain zero-padded tail inside each channel block. 
             let mut total_valid = 0usize;
             let remaining = if partial_frame {
                 self.reset_buffers();
