@@ -26,7 +26,7 @@ use std::convert::{TryFrom, TryInto};
 use std::error::Error;
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{self, BufReader, ErrorKind, IoSliceMut, Read, Seek, SeekFrom};
+use std::io::{self, BufReader, ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 const RETRIES: usize = 1; // Max retries for progress send
@@ -280,9 +280,9 @@ impl DsdReader {
                 // Block size from container.
                 // For dff, which always has a block size per channel of 1,
                 // we accept the user-supplied or default block size, which really
-                // just governs how many bytes we read at a time. 
-                // For DSF, we treat the block size as representing the 
-                // block size per channel and override any user-supplied 
+                // just governs how many bytes we read at a time.
+                // For DSF, we treat the block size as representing the
+                // block size per channel and override any user-supplied
                 // or default values for block size.
                 if let Some(block_size) = my_dsd.block_size()
                     && block_size > DFF_BLOCK_SIZE
@@ -379,13 +379,21 @@ impl DsdIter {
     /// Read one frame of DSD data into the channel buffers and return read size.
     #[inline(always)]
     pub fn load_frame(&mut self) -> Result<usize, Box<dyn Error>> {
-        // stdin always reads frame_size
-        if self.bytes_remaining < self.frame_size as u64 && !self.std_in {
-            self.set_block_size(
-                self.bytes_remaining as u32 / self.channels_num,
-                true,
-            );
-        }
+        //stdin always reads frame_size
+        let partial_frame = if self.bytes_remaining
+            < self.frame_size as u64
+            && !self.std_in
+        {
+            if self.interleaved {
+                self.set_block_size(
+                    self.bytes_remaining as u32 / self.channels_num,
+                    false,
+                );
+            }
+            true
+        } else {
+            false
+        };
 
         if self.interleaved {
             self.reader.read_exact(
@@ -399,30 +407,65 @@ impl DsdIter {
             }
             Ok(self.frame_size as usize)
         } else {
-            self.reset_buffers();
-            let mut local_buffs_vec: Vec<IoSliceMut> = self
-                .channel_buffers
-                .iter_mut()
-                .map(|b| IoSliceMut::new(b))
-                .collect();
-            let local_channel_buffs: &mut [IoSliceMut] =
-                local_buffs_vec.as_mut_slice();
+            // Planar DSF: Each channel block is fixed size (block_size) and the last
+            // frame may contain zero-padded tail inside each channel block. The spec
+            // pads WITHIN each channel's block, not after all channels. We therefore
+            // must treat trailing zeros inside a channel block as non-audio and avoid
+            // shrinking block_size (which misaligns subsequent channels).
+            // Strategy: If we have a full frame remaining, read block_size bytes per
+            // channel normally. If this is the final partial frame (bytes_remaining
+            // < frame_size), read only the remaining VALID bytes for each channel,
+            // then read & discard any padded zeros to advance the underlying reader.
+            let mut total_valid = 0usize;
+            let remaining = if partial_frame {
+                self.reset_buffers();
+                self.bytes_remaining
+            } else {
+                self.frame_size as u64
+            };
+            let valid_for_chan = (remaining / self.channels_num as u64) as usize;
+            // For each channel
+            for chan in 0..self.channels_num as usize {
+                let chan_buf = &mut self.channel_buffers[chan];
+                // Determine valid bytes for this channel in partial frame case.
 
-            // Read planar data into channel buffers
-            let this_read =
-                self.reader.read_vectored(local_channel_buffs)?;
-            if this_read == 0 {
+                if valid_for_chan > 0 {
+                    // Read valid audio bytes
+                    self.reader
+                        .read_exact(&mut chan_buf[..valid_for_chan])?;
+                    total_valid += valid_for_chan;
+                }
+
+                // If block is padded, discard padding from file so next channel starts aligned.
+                let padding = self.block_size as usize - valid_for_chan;
+                if partial_frame && padding > 0 {
+                    let mut discard = vec![0u8; padding];
+                    // It's acceptable if we hit EOF while discarding zeros; treat as done.
+                    let mut read_pad = 0usize;
+                    while read_pad < padding {
+                        match self.reader.read(&mut discard[read_pad..]) {
+                            Ok(0) => break,
+                            Ok(n) => read_pad += n,
+                            Err(e)
+                                if e.kind()
+                                    == io::ErrorKind::Interrupted =>
+                            {
+                                continue;
+                            }
+                            Err(e) => return Err(e.into()),
+                        }
+                    }
+                }
+                // Leave any unused tail (padding region) as initialized pattern (0x69) to avoid DC run.
+            }
+            if total_valid == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "Unexpected end of file",
                 )
                 .into());
             }
-            self.channel_buffers = local_channel_buffs
-                .iter()
-                .map(|b| b.to_vec().into_boxed_slice())
-                .collect();
-            Ok(this_read)
+            Ok(total_valid)
         }
     }
 
@@ -469,8 +512,9 @@ impl DsdIter {
 
     fn reset_buffers(&mut self) {
         for chan in 0..self.channels_num as usize {
-            for byte in self.channel_buffers[chan].iter_mut() {
-                *byte = 0x69u8;
+            let chan_buf = &mut self.channel_buffers[chan];
+            for byte in chan_buf.iter_mut() {
+                *byte = 0x69;
             }
         }
     }
@@ -533,8 +577,7 @@ impl Iterator for DsdIter {
                 return Some((read_size, self.channel_buffers.clone()));
             }
             Err(e) => {
-                if let Some(io_err) = e.downcast_ref::<io::Error>()
-                {
+                if let Some(io_err) = e.downcast_ref::<io::Error>() {
                     match io_err.kind() {
                         ErrorKind::Interrupted => {
                             if self.retries < RETRIES {
@@ -542,7 +585,9 @@ impl Iterator for DsdIter {
                                 self.retries += 1;
                                 return self.next();
                             } else {
-                                error!("Max retries reached for interrupted I/O.");
+                                error!(
+                                    "Max retries reached for interrupted I/O."
+                                );
                                 return None;
                             }
                         }

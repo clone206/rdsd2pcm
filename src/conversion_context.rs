@@ -183,6 +183,10 @@ impl ConversionContext {
 
         self.process_blocks(&sender)?;
 
+        if let Some(sender) = sender {
+            sender.send(ONE_HUNDRED_PERCENT).ok();
+        }
+
         let dsp_elapsed = wall_start.elapsed();
 
         info!(
