@@ -418,20 +418,20 @@ impl DsdIter {
             };
             let valid_for_chan =
                 (remaining / self.channels_num as u64) as usize;
-            // For each channel
+            let padding = self.block_size as usize - valid_for_chan;
+
             for chan in 0..self.channels_num as usize {
                 let chan_buf = &mut self.channel_buffers[chan];
-                // Determine valid bytes for this channel in partial frame case.
 
-                // Read valid audio bytes
                 self.reader.read_exact(&mut chan_buf[..valid_for_chan])?;
                 total_valid += valid_for_chan;
 
-                // If block is padded, discard padding from file so next channel starts aligned.
-                if partial_frame {
-                    let padding = self.block_size as usize - valid_for_chan;
-                    let mut discard = vec![0u8; padding];
-                    self.reader.read_exact(&mut discard[..padding])?;
+                if padding > 0 {
+                    // If block is padded, discard padding from file so next channel starts aligned.
+                    let byte_reader = self.reader.as_mut();
+                    for _ in 0..padding {
+                        byte_reader.bytes().next();
+                    }
                 }
             }
             Ok(total_valid)
