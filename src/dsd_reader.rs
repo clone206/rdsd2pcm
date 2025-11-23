@@ -408,7 +408,7 @@ impl DsdIter {
             Ok(self.frame_size as usize)
         } else {
             // Planar DSF: Each channel block is fixed size (block_size) and the last
-            // frame may contain zero-padded tail inside each channel block. 
+            // frame may contain zero-padded tail inside each channel block.
             let mut total_valid = 0usize;
             let remaining = if partial_frame {
                 self.reset_buffers();
@@ -416,47 +416,23 @@ impl DsdIter {
             } else {
                 self.frame_size as u64
             };
-            let valid_for_chan = (remaining / self.channels_num as u64) as usize;
+            let valid_for_chan =
+                (remaining / self.channels_num as u64) as usize;
             // For each channel
             for chan in 0..self.channels_num as usize {
                 let chan_buf = &mut self.channel_buffers[chan];
                 // Determine valid bytes for this channel in partial frame case.
 
-                if valid_for_chan > 0 {
-                    // Read valid audio bytes
-                    self.reader
-                        .read_exact(&mut chan_buf[..valid_for_chan])?;
-                    total_valid += valid_for_chan;
-                }
+                // Read valid audio bytes
+                self.reader.read_exact(&mut chan_buf[..valid_for_chan])?;
+                total_valid += valid_for_chan;
 
                 // If block is padded, discard padding from file so next channel starts aligned.
-                let padding = self.block_size as usize - valid_for_chan;
-                if partial_frame && padding > 0 {
+                if partial_frame {
+                    let padding = self.block_size as usize - valid_for_chan;
                     let mut discard = vec![0u8; padding];
-                    // It's acceptable if we hit EOF while discarding zeros; treat as done.
-                    let mut read_pad = 0usize;
-                    while read_pad < padding {
-                        match self.reader.read(&mut discard[read_pad..]) {
-                            Ok(0) => break,
-                            Ok(n) => read_pad += n,
-                            Err(e)
-                                if e.kind()
-                                    == io::ErrorKind::Interrupted =>
-                            {
-                                continue;
-                            }
-                            Err(e) => return Err(e.into()),
-                        }
-                    }
+                    self.reader.read_exact(&mut discard[..padding])?;
                 }
-                // Leave any unused tail (padding region) as initialized pattern (0x69) to avoid DC run.
-            }
-            if total_valid == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "Unexpected end of file",
-                )
-                .into());
             }
             Ok(total_valid)
         }
