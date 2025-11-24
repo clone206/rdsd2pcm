@@ -38,7 +38,7 @@ use crate::{
 };
 
 pub use dsd_reader::DsdRate;
-use dsd_reader::{DsdReader, Endianness, FmtType};
+pub use dsd_reader::{DsdReader, Endianness, FmtType};
 pub use dsd_reader::dsd_file::{DsdFileFormat, FormatExtensions};
 
 /// `100.0`
