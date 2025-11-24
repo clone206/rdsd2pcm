@@ -40,6 +40,7 @@ use crate::{
 };
 
 pub use crate::dsd_reader::DsdRate;
+pub use crate::dsd_file::{DsdFileFormat, FormatExtensions};
 
 /// `100.0`
 pub const ONE_HUNDRED_PERCENT: f32 = 100.0;
