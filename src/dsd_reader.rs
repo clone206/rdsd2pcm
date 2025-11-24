@@ -160,7 +160,7 @@ impl DsdReader {
             parent_path: path_attrs.parent_path,
             channels_num: channels,
             block_size: block_size,
-            audio_length: if path_attrs.std_in { u64::MAX } else { 0 },
+            audio_length: 0,
             audio_pos: 0,
             file: None,
             tag: None,
@@ -171,101 +171,6 @@ impl DsdReader {
         debug!("Set block_size={}", ctx.block_size);
 
         ctx.init()?;
-
-        Ok(ctx)
-    }
-
-    // Construct DsdReader for stdin input
-    #[allow(dead_code)]
-    pub fn from_stdin(
-        format: FmtType,
-        endianness: Endianness,
-        dsd_rate: DsdRate,
-        block_size: u32,
-        channels: u32,
-    ) -> Result<Self, Box<dyn Error>> {
-        // Enforce dsd_rate
-        if ![1, 2, 4].contains(&(dsd_rate as u32)) {
-            return Err("Unsupported DSD input rate.".into());
-        }
-
-        let lsbit_first = match endianness {
-            Endianness::LsbFirst => true,
-            Endianness::MsbFirst => false,
-        };
-
-        let interleaved = match format {
-            FmtType::Planar => false,
-            FmtType::Interleaved => true,
-        };
-
-        let mut ctx = Self::default();
-        ctx.dsd_rate = dsd_rate;
-        ctx.block_size = block_size;
-        ctx.channels_num = channels;
-        ctx.lsbit_first = lsbit_first;
-        ctx.interleaved = interleaved;
-        debug!("Set block_size={}", ctx.block_size);
-
-        ctx.debug_stdin();
-
-        Ok(ctx)
-    }
-
-    #[allow(dead_code)]
-    pub fn from_raw_file(
-        format: FmtType,
-        endianness: Endianness,
-        dsd_rate: DsdRate,
-        block_size: u32,
-        channels: u32,
-        in_path: PathBuf,
-    ) -> Result<Self, Box<dyn Error>> {
-        // Enforce dsd_rate
-        if ![1, 2, 4].contains(&(dsd_rate as u32)) {
-            return Err("Unsupported DSD input rate.".into());
-        }
-
-        if in_path.is_dir() {
-            return Err("Input path cannot be a directory".into());
-        }
-        let file_format = DsdFileFormat::from(&in_path);
-        if file_format.is_container() {
-            return Err(
-                "Input file is a container format. Raw read will be problematic".into()
-            );
-        }
-        let parent_path =
-            Some(in_path.parent().unwrap_or(Path::new("")).to_path_buf());
-        let file_name = in_path
-            .file_name()
-            .unwrap_or_else(|| "stdin".as_ref())
-            .to_os_string();
-
-        let lsbit_first = match endianness {
-            Endianness::LsbFirst => true,
-            Endianness::MsbFirst => false,
-        };
-
-        let interleaved = match format {
-            FmtType::Planar => false,
-            FmtType::Interleaved => true,
-        };
-
-        let mut ctx = Self::default();
-        ctx.dsd_rate = dsd_rate;
-        ctx.block_size = block_size;
-        ctx.channels_num = channels;
-        ctx.lsbit_first = lsbit_first;
-        ctx.interleaved = interleaved;
-        ctx.in_path = Some(in_path);
-        ctx.std_in = false;
-        ctx.parent_path = parent_path;
-        ctx.file_name = file_name;
-        ctx.file_format = Some(file_format);
-        debug!("Set block_size={}", ctx.block_size);
-
-        ctx.update_from_file(file_format)?;
 
         Ok(ctx)
     }
