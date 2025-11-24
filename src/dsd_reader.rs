@@ -21,7 +21,7 @@ use crate::dsd_file::{
     DFF_BLOCK_SIZE, DSD_64_RATE, DsdFile, DsdFileFormat,
 };
 use crate::{Endianness, FmtType};
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, info, warn};
 use std::convert::{TryFrom, TryInto};
 use std::error::Error;
 use std::ffi::OsString;
@@ -151,7 +151,7 @@ impl DsdReader {
         Ok(ctx)
     }
 
-    /// Construct and return instance of DsdIter for reading DSD data frames.
+    /// Construct and return instance of DSD sample iterator for reading DSD data frames.
     pub fn reader(&self) -> Result<DsdIter, Box<dyn Error>> {
         DsdIter::new(self)
     }

@@ -19,20 +19,20 @@
 use flac_codec::metadata::{self, Picture, PictureType, VorbisComment};
 use id3::TagLike;
 
-use crate::{Dither, OutputType};
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
+use crate::{Dither, OutputType};
+use log::{debug, info};
 use std::error::Error;
 use std::io::Write;
 use std::path::PathBuf;
 use std::{io, vec};
-use log::{info, debug};
 
 pub struct PcmWriter {
     float_data: Vec<f64>,
     scale_factor: f64,
     bits: i32,
     channels_num: u32,
-    rate: i32,
+    rate: u32,
     bytes_per_sample: i32,
     output: OutputType,
     path: Option<PathBuf>,
@@ -49,7 +49,7 @@ pub struct PcmWriter {
 }
 
 impl PcmWriter {
-    pub fn rate(&self) -> i32 {
+    pub fn rate(&self) -> u32 {
         self.rate
     }
     pub fn channels_num(&self) -> u32 {
@@ -57,9 +57,6 @@ impl PcmWriter {
     }
     pub fn clips(&self) -> i32 {
         self.clips
-    }
-    pub fn dither(&self) -> &Dither {
-        &self.dither
     }
     pub fn bytes_per_sample(&self) -> i32 {
         self.bytes_per_sample
@@ -81,9 +78,12 @@ impl PcmWriter {
         out_bits: i32,
         out_type: OutputType,
         out_vol: f64,
-        out_rate: i32,
+        out_rate: u32,
         out_path: Option<PathBuf>,
         dither: Dither,
+        out_frames_capacity: usize,
+        channels_num: u32,
+        upsample_ratio: u32,
     ) -> Result<Self, Box<dyn Error>> {
         if ![16, 20, 24, 32].contains(&out_bits) {
             return Err("Unsupported bit depth".into());
@@ -96,7 +96,10 @@ impl PcmWriter {
             );
         }
 
-        if out_bits == 32 && out_type != OutputType::Stdout && out_type != OutputType::Wav {
+        if out_bits == 32
+            && out_type != OutputType::Stdout
+            && out_type != OutputType::Wav
+        {
             return Err(
                 "32 bit float only allowed with wav or stdout".into()
             );
@@ -119,13 +122,18 @@ impl PcmWriter {
             bits: out_bits,
             output: out_type,
             bytes_per_sample,
-            channels_num: 0,
+            channels_num: channels_num,
             rate: out_rate,
             peak_level: 0,
             scale_factor: 1.0,
             float_file: None,
             int_file: None,
-            stdout_buf: Vec::new(),
+            stdout_buf: vec![
+                0u8;
+                out_frames_capacity
+                    * channels_num as usize
+                    * bytes_per_sample as usize
+            ],
             vorbis: None,
             pictures: Vec::new(),
             path: out_path,
@@ -133,42 +141,23 @@ impl PcmWriter {
             last_samps_clipped_high: 0,
             clips: 0,
             dither,
-            float_data: Vec::new(),
+            float_data: vec![0.0; out_frames_capacity],
         };
 
-        ctx.set_scaling(out_vol);
+        ctx.set_scaling(out_vol, upsample_ratio);
+        ctx.init();
+
+        debug!(
+            "Dither type: {:#?}",
+            ctx.dither.dither_type()
+        );
         Ok(ctx)
     }
 
-    pub fn update_scaling_lm(&mut self, upsample_ratio: u32) {
-        self.scale_factor *= upsample_ratio as f64;
-    }
-
-    pub fn init(
-        &mut self,
-        out_frames_capacity: usize,
-        channels_num: u32,
-    ) {
-        self.channels_num = channels_num;
-        self.float_data = vec![0.0; out_frames_capacity];
-        self.clips = 0;
-        self.last_samps_clipped_low = 0;
-        self.last_samps_clipped_high = 0;
-        self.dither.init();
-
+    fn init(&mut self) {
         if self.output == OutputType::Stdout {
-            self.stdout_buf = vec![
-                0u8;
-                out_frames_capacity
-                    * self.channels_num as usize
-                    * self.bytes_per_sample as usize
-            ];
             return;
         }
-        // Clear for each new output
-        self.vorbis = None;
-        self.pictures.clear();
-
         if self.bits == 32 {
             self.float_file = Some(AudioFile::new());
             self.set_file_params_float();
@@ -186,8 +175,7 @@ impl PcmWriter {
         self.vorbis = Some(vorbis);
     }
 
-    pub fn set_scaling(&mut self, volume: f64) {
-        self.scale_factor = 1.0;
+    pub fn set_scaling(&mut self, volume: f64, upsample_ratio: u32) {
         let vol_scale = 10.0f64.powf(volume / 20.0);
 
         if self.bits != 32 {
@@ -196,6 +184,7 @@ impl PcmWriter {
 
         self.peak_level = self.scale_factor.floor() as i32;
         self.scale_factor *= vol_scale;
+        self.scale_factor *= upsample_ratio as f64
     }
 
     fn set_file_params_float(&mut self) {
@@ -497,31 +486,6 @@ impl PcmWriter {
             (x - 0.5).floor() as i64
         } else {
             (x + 0.5).floor() as i64
-        }
-    }
-}
-
-impl Clone for PcmWriter {
-    fn clone(&self) -> Self {
-        Self {
-            bits: self.bits,
-            channels_num: self.channels_num,
-            rate: self.rate,
-            bytes_per_sample: self.bytes_per_sample,
-            output: self.output,
-            peak_level: self.peak_level,
-            scale_factor: self.scale_factor,
-            float_file: self.float_file.clone(),
-            int_file: self.int_file.clone(),
-            stdout_buf: self.stdout_buf.clone(),
-            vorbis: self.vorbis.clone(),
-            pictures: self.pictures.clone(),
-            path: self.path.clone(),
-            last_samps_clipped_low: self.last_samps_clipped_low,
-            last_samps_clipped_high: self.last_samps_clipped_high,
-            clips: self.clips,
-            dither: self.dither.clone(),
-            float_data: self.float_data.clone(),
         }
     }
 }

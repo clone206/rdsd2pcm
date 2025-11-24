@@ -910,7 +910,7 @@ fn get_or_build_stage1_lut(
 
 pub fn compute_decim_and_upsample(
     in_rate: i32,
-    out_rate: i32,
+    out_rate: u32,
 ) -> (i32, u32) {
     // Determine decimation ratio (M)
     let decim_ratio: i32 = if out_rate == 96_000 && in_rate == 4 {

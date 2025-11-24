@@ -34,8 +34,7 @@ mod pcm_writer;
 use std::{error::Error, fs, io, path::PathBuf, sync::mpsc};
 
 use crate::{
-    conversion_context::ConversionContext, dither::Dither,
-    dsd_reader::{DsdReader, DsdRate}, pcm_writer::PcmWriter,
+    conversion_context::ConversionContext, dither::Dither, dsd_reader::{DsdRate, DsdReader}, lm_resampler::compute_decim_and_upsample, pcm_writer::PcmWriter
 };
 
 /// `100.0`
@@ -71,7 +70,7 @@ impl Rdsd2Pcm {
         bit_depth: i32,
         out_type: OutputType,
         level_db: f64,
-        out_rate: i32,
+        out_rate: u32,
         out_path: Option<PathBuf>,
         dither_type: DitherType,
         in_format: FmtType,
@@ -84,16 +83,7 @@ impl Rdsd2Pcm {
         base_dir: PathBuf,
         in_path: Option<PathBuf>,
     ) -> Result<Self, Box<dyn Error>> {
-        let out_ctx = PcmWriter::new(
-            bit_depth,
-            out_type,
-            level_db,
-            out_rate,
-            out_path.clone(),
-            Dither::new(dither_type)?,
-        )?;
-
-        let in_ctx = DsdReader::new(
+        let dsd_reader = DsdReader::new(
             in_path.clone(),
             in_format,
             endianness,
@@ -102,12 +92,36 @@ impl Rdsd2Pcm {
             num_channels,
         )?;
 
+        let (decim_ratio, upsample_ratio) = compute_decim_and_upsample(
+            dsd_reader.dsd_rate(),
+            out_rate,
+        );
+        let out_frames_capacity = Self::calc_frames_cap(
+            dsd_reader.block_size() as usize,
+            decim_ratio,
+            upsample_ratio,
+        );
+
+        let pcm_writer = PcmWriter::new(
+            bit_depth,
+            out_type,
+            level_db,
+            out_rate,
+            out_path.clone(),
+            Dither::new(dither_type)?,
+            out_frames_capacity,
+            dsd_reader.channels_num(),
+            upsample_ratio,
+        )?;
+
         let conv_ctx = ConversionContext::new(
-            in_ctx,
-            out_ctx,
+            dsd_reader,
+            pcm_writer,
             filt_type,
             append_rate_suffix,
             base_dir,
+            decim_ratio,
+            upsample_ratio,
         )?;
 
         let rdsd2pcm = Self {
@@ -115,6 +129,17 @@ impl Rdsd2Pcm {
         };
 
         Ok(rdsd2pcm)
+    }
+
+    /// Worst-case frames per channel per input block:
+    /// ceil((bits_in * L) / M). Add small slack for LM paths to avoid edge truncation.
+    fn calc_frames_cap(block_size: usize, decim: i32, upsample: u32) -> usize {
+        let bits_per_chan = block_size * 8;
+        let frames_max = ((bits_per_chan * (upsample as usize))
+            + (decim.abs() as usize - 1))
+            / (decim.abs() as usize);
+        let lm_slack = if upsample > 1 { 16 } else { 0 };
+        frames_max + lm_slack
     }
 
     /// Perform the conversion from DSD to PCM
@@ -128,7 +153,7 @@ impl Rdsd2Pcm {
 
     /// Get the input file name (or empty string for stdin)
     pub fn file_name(&self) -> String {
-        self.conv_ctx.file_name()
+        self.conv_ctx.file_name_lossy()
     }
 }
 

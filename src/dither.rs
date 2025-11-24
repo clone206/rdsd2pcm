@@ -48,15 +48,18 @@ impl Dither {
             Err(_) => (1.0, 1.0),
         };
 
-        Ok(Self {
+        let mut dither = Self {
             fpd: 1,
             dither_type,
             neg_scale,
             pos_scale,
-        })
+        };
+        dither.init();
+
+        Ok(dither)
     }
 
-    pub fn init(&mut self) {
+    fn init(&mut self) {
         if self.dither_type != DitherType::None {
             let _ = rand::thread_rng();
         }

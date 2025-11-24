@@ -24,7 +24,6 @@ use crate::byte_precalc_decimator::select_precalc_taps;
 use crate::dsd_file::DSD_64_RATE;
 use crate::dsd_reader::DsdReader;
 use crate::lm_resampler::LMResampler;
-use crate::lm_resampler::compute_decim_and_upsample;
 use crate::pcm_writer::PcmWriter;
 use id3::TagLike;
 use log::error;
@@ -56,38 +55,15 @@ pub struct ConversionContext {
     chan_bits_read: u64,
 }
 impl ConversionContext {
-    pub fn chan_bits_read(&self) -> u64 {
-        self.chan_bits_read
-    }
-    pub fn bytes_read(&self) -> u64 {
-        self.bytes_read
-    }
-    pub fn file_name(&self) -> String {
-        self.dsd_reader.file_name().to_string_lossy().into_owned()
-    }
-
     pub fn new(
         dsd_reader: DsdReader,
         pcm_writer: PcmWriter,
         filt_type: FilterType,
         append_rate_suffix: bool,
         base_dir: PathBuf,
+        decim_ratio: i32,
+        upsample_ratio: u32,
     ) -> Result<Self, Box<dyn Error>> {
-        let dsd_bytes_per_chan = dsd_reader.block_size() as usize;
-        let (decim_ratio, upsample_ratio) = compute_decim_and_upsample(
-            dsd_reader.dsd_rate(),
-            pcm_writer.rate(),
-        );
-
-        // Worst-case frames per channel per input block:
-        // ceil((bits_in * L) / M). Add small slack for LM paths to avoid edge truncation.
-        let bits_per_chan = dsd_bytes_per_chan * 8;
-        let frames_max = ((bits_per_chan * (upsample_ratio as usize))
-            + (decim_ratio.abs() as usize - 1))
-            / (decim_ratio.abs() as usize);
-        let lm_slack = if upsample_ratio > 1 { 16 } else { 0 };
-        let out_frames_capacity = frames_max + lm_slack;
-
         let mut ctx = Self {
             dsd_reader,
             pcm_writer,
@@ -105,20 +81,13 @@ impl ConversionContext {
         };
 
         ctx.setup_resamplers()?;
-        ctx.pcm_writer
-            .init(out_frames_capacity, ctx.dsd_reader.channels_num());
 
-        debug!(
-            "Dither type: {:#?}",
-            ctx.pcm_writer.dither().dither_type()
-        );
         Ok(ctx)
     }
 
-    fn inc_bytes_read(&mut self, read_size: usize) {
-        self.bytes_read += read_size as u64;
-        self.chan_bits_read +=
-            (read_size as u64 / self.dsd_reader.channels_num() as u64) * 8;
+    /// Get input file name for display purposes (potentially lossy)
+    pub fn file_name_lossy(&self) -> String {
+        self.dsd_reader.file_name().to_string_lossy().into_owned()
     }
 
     fn setup_resamplers(&mut self) -> Result<(), Box<dyn Error>> {
@@ -134,7 +103,6 @@ impl ConversionContext {
                 )?);
             }
             self.eq_lm_resamplers = Some(resamplers);
-            self.pcm_writer.update_scaling_lm(self.upsample_ratio);
             trace!(
                 "L/M path makeup gain: ×{} (scale_factor now {:.6})",
                 self.upsample_ratio,
@@ -164,7 +132,7 @@ impl ConversionContext {
             );
         } else {
             return Err(format!(
-                "Taps not found for ratio {} / filter '{:#?}' (dsd_rate {}). ",
+                "Taps not found for decimation ratio {} / filter '{:#?}' (dsd_rate {}). ",
                 self.decim_ratio,
                 self.filt_type,
                 self.dsd_reader.dsd_rate()
@@ -174,6 +142,14 @@ impl ConversionContext {
         Ok(())
     }
 
+    /// Increment bytes and bits read counters
+    fn inc_bytes_read(&mut self, read_size: usize) {
+        self.bytes_read += read_size as u64;
+        self.chan_bits_read +=
+            (read_size as u64 / self.dsd_reader.channels_num() as u64) * 8;
+    }
+
+    /// Main conversion driver code with optional percentage progress sender
     pub fn do_conversion(
         &mut self,
         sender: Option<mpsc::Sender<f32>>,
@@ -191,7 +167,7 @@ impl ConversionContext {
 
         info!(
             "{} clipped {} times.",
-            self.file_name(),
+            self.file_name_lossy(),
             self.pcm_writer.clips()
         );
 
@@ -208,6 +184,7 @@ impl ConversionContext {
         Ok(())
     }
 
+    /// Main conversion loop with optional percentage progress sender
     fn process_blocks(
         &mut self,
         sender: &Option<mpsc::Sender<f32>>,
@@ -242,7 +219,7 @@ impl ConversionContext {
         sender: &Option<mpsc::Sender<f32>>,
     ) -> usize {
         self.inc_bytes_read(read_size);
-        self.diag_expected_frames_floor = (self.chan_bits_read()
+        self.diag_expected_frames_floor = (self.chan_bits_read
             * self.upsample_ratio as u64)
             / self.decim_ratio as u64;
         self.diag_frames_out += samples_used_per_chan as u64;
@@ -250,7 +227,7 @@ impl ConversionContext {
         if let Some(sender) = sender {
             for i in 0..=RETRIES {
                 match sender.send(
-                    (self.bytes_read() as f32
+                    (self.bytes_read as f32
                         / self.dsd_reader.audio_length() as f32)
                         * ONE_HUNDRED_PERCENT,
                 ) {
@@ -274,7 +251,7 @@ impl ConversionContext {
     }
 
     // Unified per-channel processing: handles both LM (rational) and integer paths.
-    // Returns the number of frames produced into self.float_data for this channel.
+    // Returns the number of frames produced into buffers for this channel.
     #[inline(always)]
     fn process_channel(
         &mut self,
@@ -534,12 +511,12 @@ impl ConversionContext {
         dsp_elapsed: std::time::Duration,
         total_elapsed: std::time::Duration,
     ) {
-        if self.bytes_read() == 0 {
+        if self.bytes_read == 0 {
             return;
         }
         let channels = self.dsd_reader.channels_num() as u64;
         // Bytes per channel
-        let bytes_per_chan = self.bytes_read() / channels;
+        let bytes_per_chan = self.bytes_read / channels;
         let bits_per_chan = bytes_per_chan * 8;
         let dsd_base_rate =
             (DSD_64_RATE as u64) * (self.dsd_reader.dsd_rate() as u64); // samples/sec per channel
@@ -559,14 +536,14 @@ impl ConversionContext {
         let s = total_secs % 60;
         debug!(
             "{} bytes processed in {:02}:{:02}:{:02}",
-            self.bytes_read(),
+            self.bytes_read,
             h,
             m,
             s,
         );
         info!(
             "DSP speed for {}: {:.2}x, End-to-end: {:.2}x",
-            self.file_name(),
+            self.file_name_lossy(),
             speed_dsp,
             speed_total
         );
@@ -593,7 +570,7 @@ impl ConversionContext {
         trace!("Output length accounting:");
         trace!(
             "DSD bits in per channel: {}  L={}  M={}",
-            self.chan_bits_read(),
+            self.chan_bits_read,
             self.upsample_ratio,
             self.decim_ratio
         );
