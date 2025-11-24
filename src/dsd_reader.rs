@@ -176,7 +176,6 @@ impl DsdReader {
     }
 
     /// Construct DsdReader from container file input (e.g. DSF, DFF)
-    #[allow(dead_code)]
     pub fn from_container(
         in_path: PathBuf,
     ) -> Result<Self, Box<dyn Error>> {

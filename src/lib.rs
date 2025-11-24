@@ -25,16 +25,18 @@ mod byte_precalc_decimator;
 mod conversion_context;
 mod dither;
 mod dsd_file;
+mod dsd_reader;
 mod filters;
 mod filters_lm;
-mod dsd_reader;
 mod lm_resampler;
 mod pcm_writer;
 
 use std::{error::Error, fs, io, path::PathBuf, sync::mpsc};
 
 use crate::{
-    conversion_context::ConversionContext, dither::Dither, dsd_reader::DsdReader, lm_resampler::compute_decim_and_upsample, pcm_writer::PcmWriter
+    conversion_context::ConversionContext, dither::Dither,
+    dsd_reader::DsdReader, lm_resampler::compute_decim_and_upsample,
+    pcm_writer::PcmWriter,
 };
 
 pub use crate::dsd_reader::DsdRate;
@@ -51,8 +53,9 @@ pub struct Rdsd2Pcm {
 
 impl Rdsd2Pcm {
     /// Create a new Rdsd2Pcm conversion context.
-    /// Certain input parameters will be overriden when 
-    /// loading a container file (a .dsf or .dff file)
+    /// Certain input parameters will be overriden when
+    /// loading a container file (a .dsf or .dff file). Consider using
+    /// `Rdsd2Pcm::from_container` when converting from container files.
     /// * `bit_depth` - Output PCM bit depth
     /// * `out_type` - Output type (audio file or stdout)
     /// * `level_db` - Output level adjustment in dB
@@ -94,10 +97,73 @@ impl Rdsd2Pcm {
             num_channels,
         )?;
 
-        let (decim_ratio, upsample_ratio) = compute_decim_and_upsample(
-            dsd_reader.dsd_rate(),
+        Self::delegate_new(
+            dsd_reader,
+            bit_depth,
+            out_type,
+            level_db,
             out_rate,
-        );
+            out_path,
+            dither_type,
+            filt_type,
+            append_rate_suffix,
+            base_dir,
+        )
+    }
+
+    /// Create a new Rdsd2Pcm conversion context using a container file as input.
+    /// * `bit_depth` - Output PCM bit depth
+    /// * `out_type` - Output type (audio file or stdout)
+    /// * `level_db` - Output level adjustment in dB
+    /// * `out_rate` - Output PCM sample rate
+    /// * `out_path` - Optional output path. Same as input file if None.
+    /// * `dither_type` - Dither type to apply
+    /// * `filt_type` - Filter type to use for conversion
+    /// * `append_rate_suffix` - Whether to append the sample rate to output file names and album tags
+    /// * `base_dir` - Base directory for output files' relative paths
+    /// * `in_path` - Path to input DSD container file (e.g., .dsf or .dff)
+    pub fn from_container(
+        bit_depth: i32,
+        out_type: OutputType,
+        level_db: f64,
+        out_rate: u32,
+        out_path: Option<PathBuf>,
+        dither_type: DitherType,
+        filt_type: FilterType,
+        append_rate_suffix: bool,
+        base_dir: PathBuf,
+        in_path: PathBuf,
+    ) -> Result<Self, Box<dyn Error>> {
+        let dsd_reader = DsdReader::from_container(in_path.clone())?;
+
+        Self::delegate_new(
+            dsd_reader,
+            bit_depth,
+            out_type,
+            level_db,
+            out_rate,
+            out_path,
+            dither_type,
+            filt_type,
+            append_rate_suffix,
+            base_dir,
+        )
+    }
+
+    fn delegate_new(
+        dsd_reader: DsdReader,
+        bit_depth: i32,
+        out_type: OutputType,
+        level_db: f64,
+        out_rate: u32,
+        out_path: Option<PathBuf>,
+        dither_type: DitherType,
+        filt_type: FilterType,
+        append_rate_suffix: bool,
+        base_dir: PathBuf,
+    ) -> Result<Self, Box<dyn Error>> {
+        let (decim_ratio, upsample_ratio) =
+            compute_decim_and_upsample(dsd_reader.dsd_rate(), out_rate);
         let out_frames_capacity = Self::calc_frames_cap(
             dsd_reader.block_size() as usize,
             decim_ratio,
@@ -126,16 +192,18 @@ impl Rdsd2Pcm {
             upsample_ratio,
         )?;
 
-        let rdsd2pcm = Self {
-            conv_ctx,
-        };
+        let rdsd2pcm = Self { conv_ctx };
 
         Ok(rdsd2pcm)
     }
 
     /// Worst-case frames per channel per input block:
     /// ceil((bits_in * L) / M). Add small slack for LM paths to avoid edge truncation.
-    fn calc_frames_cap(block_size: usize, decim: i32, upsample: u32) -> usize {
+    fn calc_frames_cap(
+        block_size: usize,
+        decim: i32,
+        upsample: u32,
+    ) -> usize {
         let bits_per_chan = block_size * 8;
         let frames_max = ((bits_per_chan * (upsample as usize))
             + (decim.abs() as usize - 1))
