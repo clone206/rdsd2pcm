@@ -16,6 +16,7 @@
  along with rdsd2pcm. If not, see <https://www.gnu.org/licenses/>.
 */
 
+use dsf_meta::DSF_SAMPLE_DATA_OFFSET;
 use id3::Tag;
 use log::warn;
 use std::{
@@ -60,8 +61,6 @@ impl From<&PathBuf> for DsdFileFormat {
 pub const DSD_64_RATE: u32 = 2822400;
 pub const DFF_BLOCK_SIZE: u32 = 1;
 pub const DSF_BLOCK_SIZE: u32 = 4096;
-/// The offset in bytes of the sample data within a DSF file.
-pub const DSF_SAMPLE_DATA_OFFSET: u64 = 92;
 
 pub struct DsdFile {
     audio_length: u64,
