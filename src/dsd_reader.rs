@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 
 const RETRIES: usize = 1; // Max retries for progress send
 
+/// DSD rate multiplier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DsdRate {
     #[default]

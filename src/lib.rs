@@ -34,8 +34,10 @@ mod pcm_writer;
 use std::{error::Error, fs, io, path::PathBuf, sync::mpsc};
 
 use crate::{
-    conversion_context::ConversionContext, dither::Dither, dsd_reader::{DsdRate, DsdReader}, lm_resampler::compute_decim_and_upsample, pcm_writer::PcmWriter
+    conversion_context::ConversionContext, dither::Dither, dsd_reader::DsdReader, lm_resampler::compute_decim_and_upsample, pcm_writer::PcmWriter
 };
+
+pub use crate::dsd_reader::DsdRate;
 
 /// `100.0`
 pub const ONE_HUNDRED_PERCENT: f32 = 100.0;
