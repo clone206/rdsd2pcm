@@ -24,8 +24,6 @@ mod audio_file;
 mod byte_precalc_decimator;
 mod conversion_context;
 mod dither;
-mod dsd_file;
-mod dsd_reader;
 mod filters;
 mod filters_lm;
 mod lm_resampler;
@@ -35,12 +33,13 @@ use std::{error::Error, fs, io, path::PathBuf, sync::mpsc};
 
 use crate::{
     conversion_context::ConversionContext, dither::Dither,
-    dsd_reader::DsdReader, lm_resampler::compute_decim_and_upsample,
+    lm_resampler::compute_decim_and_upsample,
     pcm_writer::PcmWriter,
 };
 
-pub use crate::dsd_reader::DsdRate;
-pub use crate::dsd_file::{DsdFileFormat, FormatExtensions};
+pub use dsd_reader::DsdRate;
+use dsd_reader::{DsdReader, Endianness, FmtType};
+pub use dsd_reader::dsd_file::{DsdFileFormat, FormatExtensions};
 
 /// `100.0`
 pub const ONE_HUNDRED_PERCENT: f32 = 100.0;
@@ -226,22 +225,6 @@ impl Rdsd2Pcm {
     pub fn file_name(&self) -> String {
         self.conv_ctx.file_name_lossy()
     }
-}
-
-/// DSD bit endianness
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub enum Endianness {
-    LsbFirst,
-    MsbFirst,
-}
-
-/// DSD channel format
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub enum FmtType {
-    /// Block per channel
-    Planar,
-    /// Byte per channel
-    Interleaved,
 }
 
 /// Output dither type

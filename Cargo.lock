@@ -69,6 +69,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dsd-reader"
+version = "0.1.0"
+dependencies = [
+ "dff-meta",
+ "dsf-meta",
+ "id3",
+ "log",
+]
+
+[[package]]
 name = "dsf-meta"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -217,6 +227,7 @@ name = "rdsd2pcm"
 version = "0.1.1"
 dependencies = [
  "dff-meta",
+ "dsd-reader",
  "dsf-meta",
  "flac-codec",
  "id3",

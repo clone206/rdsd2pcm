@@ -16,7 +16,7 @@
  along with rdsd2pcm. If not, see <https://www.gnu.org/licenses/>.
 */
 
-use crate::dsd_file::DSD_64_RATE;
+use dsd_reader::dsd_file::DSD_64_RATE;
 use crate::filters_lm::HTAPS_1_34MHZ_7TO1_EQ;
 use crate::filters_lm::HTAPS_2_68MHZ_7TO1_EQ;
 use crate::filters_lm::HTAPS_2_68MHZ_14TO1_EQ;

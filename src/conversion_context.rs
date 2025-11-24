@@ -21,8 +21,8 @@ use crate::ONE_HUNDRED_PERCENT;
 use crate::OutputType;
 use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::byte_precalc_decimator::select_precalc_taps;
-use crate::dsd_file::DSD_64_RATE;
-use crate::dsd_reader::DsdReader;
+use dsd_reader::dsd_file::DSD_64_RATE;
+use dsd_reader::DsdReader;
 use crate::lm_resampler::LMResampler;
 use crate::pcm_writer::PcmWriter;
 use id3::TagLike;
@@ -190,7 +190,7 @@ impl ConversionContext {
         sender: &Option<mpsc::Sender<f32>>,
     ) -> Result<(), Box<dyn Error>> {
         let channels_num = self.dsd_reader.channels_num() as usize;
-        let reader = self.dsd_reader.reader()?;
+        let reader = self.dsd_reader.dsd_iter()?;
 
         for (read_size, chan_bufs) in reader {
             let mut samples_used_per_chan = 0usize;
