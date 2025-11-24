@@ -187,12 +187,13 @@ pub enum DitherType {
 }
 
 /// Decimation filter type
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug, Default)]
 pub enum FilterType {
     /// From the original dsd2pcm c library (only for DSD64 to 352.8kHz output)
     Dsd2Pcm,
     /// Standard windowed sinc lowpass filter with equiripple design.
     /// Available for all input and output rates supported by the library.
+    #[default]
     Equiripple,
     /// Inverse chebyshev. Only available for DSD128 to 88.2kHz multiples
     Chebyshev,

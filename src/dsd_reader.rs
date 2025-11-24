@@ -18,7 +18,8 @@
 
 use crate::byte_precalc_decimator::bit_reverse_u8;
 use crate::dsd_file::{
-    DFF_BLOCK_SIZE, DSD_64_RATE, DsdFile, DsdFileFormat,
+    DFF_BLOCK_SIZE, DSD_64_RATE, DSF_BLOCK_SIZE, DsdFile, DsdFileFormat,
+    FormatExtensions,
 };
 use crate::{Endianness, FmtType};
 use log::{debug, error, info, warn};
@@ -31,8 +32,9 @@ use std::path::{Path, PathBuf};
 
 const RETRIES: usize = 1; // Max retries for progress send
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DsdRate {
+    #[default]
     DSD64 = 1,
     DSD128 = 2,
     DSD256 = 4,
@@ -73,6 +75,26 @@ pub struct DsdReader {
     file: Option<File>,
     file_format: Option<DsdFileFormat>,
 }
+impl Default for DsdReader {
+    fn default() -> Self {
+        DsdReader {
+            dsd_rate: DsdRate::default(),
+            channels_num: 2,
+            std_in: true,
+            tag: None,
+            file_name: OsString::from("stdin"),
+            audio_length: 0,
+            block_size: DSF_BLOCK_SIZE,
+            parent_path: None,
+            in_path: None,
+            lsbit_first: false,
+            interleaved: true,
+            audio_pos: 0,
+            file: None,
+            file_format: None,
+        }
+    }
+}
 
 impl DsdReader {
     pub fn dsd_rate(&self) -> i32 {
@@ -102,6 +124,7 @@ impl DsdReader {
     pub fn in_path(&self) -> &Option<PathBuf> {
         &self.in_path
     }
+
     pub fn new(
         in_path: Option<PathBuf>,
         format: FmtType,
@@ -136,7 +159,7 @@ impl DsdReader {
             parent_path: path_attrs.parent_path,
             channels_num: channels,
             block_size: block_size,
-            audio_length: 0,
+            audio_length: if path_attrs.std_in { u64::MAX } else { 0 },
             audio_pos: 0,
             file: None,
             tag: None,
@@ -147,6 +170,136 @@ impl DsdReader {
         debug!("Set block_size={}", ctx.block_size);
 
         ctx.init()?;
+
+        Ok(ctx)
+    }
+
+    // Construct DsdReader for stdin input
+    #[allow(dead_code)]
+    pub fn from_stdin(
+        format: FmtType,
+        endianness: Endianness,
+        dsd_rate: DsdRate,
+        block_size: u32,
+        channels: u32,
+    ) -> Result<Self, Box<dyn Error>> {
+        // Enforce dsd_rate
+        if ![1, 2, 4].contains(&(dsd_rate as u32)) {
+            return Err("Unsupported DSD input rate.".into());
+        }
+
+        let lsbit_first = match endianness {
+            Endianness::LsbFirst => true,
+            Endianness::MsbFirst => false,
+        };
+
+        let interleaved = match format {
+            FmtType::Planar => false,
+            FmtType::Interleaved => true,
+        };
+
+        let mut ctx = Self::default();
+        ctx.dsd_rate = dsd_rate;
+        ctx.block_size = block_size;
+        ctx.channels_num = channels;
+        ctx.lsbit_first = lsbit_first;
+        ctx.interleaved = interleaved;
+        debug!("Set block_size={}", ctx.block_size);
+
+        ctx.debug_stdin();
+
+        Ok(ctx)
+    }
+
+    #[allow(dead_code)]
+    pub fn from_raw_file(
+        format: FmtType,
+        endianness: Endianness,
+        dsd_rate: DsdRate,
+        block_size: u32,
+        channels: u32,
+        in_path: PathBuf,
+    ) -> Result<Self, Box<dyn Error>> {
+        // Enforce dsd_rate
+        if ![1, 2, 4].contains(&(dsd_rate as u32)) {
+            return Err("Unsupported DSD input rate.".into());
+        }
+
+        if in_path.is_dir() {
+            return Err("Input path cannot be a directory".into());
+        }
+        let file_format = DsdFileFormat::from(&in_path);
+        if file_format.is_container() {
+            return Err(
+                "Input file is a container format. Raw read will be problematic".into()
+            );
+        }
+        let parent_path =
+            Some(in_path.parent().unwrap_or(Path::new("")).to_path_buf());
+        let file_name = in_path
+            .file_name()
+            .unwrap_or_else(|| "stdin".as_ref())
+            .to_os_string();
+
+        let lsbit_first = match endianness {
+            Endianness::LsbFirst => true,
+            Endianness::MsbFirst => false,
+        };
+
+        let interleaved = match format {
+            FmtType::Planar => false,
+            FmtType::Interleaved => true,
+        };
+
+        let mut ctx = Self::default();
+        ctx.dsd_rate = dsd_rate;
+        ctx.block_size = block_size;
+        ctx.channels_num = channels;
+        ctx.lsbit_first = lsbit_first;
+        ctx.interleaved = interleaved;
+        ctx.in_path = Some(in_path);
+        ctx.std_in = false;
+        ctx.parent_path = parent_path;
+        ctx.file_name = file_name;
+        ctx.file_format = Some(file_format);
+        debug!("Set block_size={}", ctx.block_size);
+
+        ctx.update_from_file(file_format)?;
+
+        Ok(ctx)
+    }
+
+    /// Construct DsdReader from container file input (e.g. DSF, DFF)
+    #[allow(dead_code)]
+    pub fn from_container(
+        in_path: PathBuf,
+    ) -> Result<Self, Box<dyn Error>> {
+        if in_path.is_dir() {
+            return Err("Input path cannot be a directory".into());
+        }
+        let file_format = DsdFileFormat::from(&in_path);
+        if !file_format.is_container() {
+            return Err(
+                "Input file is not a recognized container format".into()
+            );
+        }
+        let parent_path =
+            Some(in_path.parent().unwrap_or(Path::new("")).to_path_buf());
+        let file_name = in_path
+            .file_name()
+            .unwrap_or_else(|| "stdin".as_ref())
+            .to_os_string();
+
+        let mut ctx = Self::default();
+        ctx.in_path = Some(in_path);
+        ctx.std_in = false;
+        ctx.parent_path = parent_path;
+        ctx.file_name = file_name;
+        ctx.file_format = Some(file_format);
+
+        debug!("Set block_size={}", ctx.block_size);
+
+        ctx.update_from_file(file_format)?;
 
         Ok(ctx)
     }
@@ -163,19 +316,7 @@ impl DsdReader {
             if p.is_dir() {
                 return Err("Input path cannot be a directory".into());
             }
-            let file_format = if let Some(ext_str) = p.extension() {
-                match ext_str
-                    .to_ascii_lowercase()
-                    .to_string_lossy()
-                    .as_ref()
-                {
-                    "dsf" => Some(DsdFileFormat::Dsf),
-                    "dff" => Some(DsdFileFormat::Dsdiff),
-                    _ => Some(DsdFileFormat::Raw),
-                }
-            } else {
-                Some(DsdFileFormat::Raw)
-            };
+            let file_format = Some(DsdFileFormat::from(p));
             let parent_path =
                 Some(p.parent().unwrap_or(Path::new("")).to_path_buf());
             let file_name = p
@@ -201,7 +342,7 @@ impl DsdReader {
 
     pub fn init(&mut self) -> Result<(), Box<dyn Error>> {
         if self.std_in {
-            self.set_stdin();
+            self.debug_stdin();
         } else if let Some(format) = self.file_format {
             self.update_from_file(format)?;
         } else {
@@ -211,10 +352,8 @@ impl DsdReader {
         Ok(())
     }
 
-    fn set_stdin(&mut self) {
+    fn debug_stdin(&mut self) {
         debug!("Reading from stdin");
-        self.audio_length = u64::MAX;
-        self.audio_pos = 0;
         debug!(
             "Using CLI parameters: {} channels, LSB first: {}, Interleaved: {}",
             self.channels_num,

@@ -17,11 +17,11 @@
 */
 
 use id3::Tag;
+use log::warn;
 use std::{
     fs::File,
     path::{Path, PathBuf},
 };
-use log::warn;
 
 // Strongly typed container format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +29,32 @@ pub enum DsdFileFormat {
     Dsdiff,
     Dsf,
     Raw,
+}
+
+pub trait FormatExtensions {
+    fn is_container(&self) -> bool;
+}
+impl FormatExtensions for DsdFileFormat {
+    fn is_container(&self) -> bool {
+        match self {
+            DsdFileFormat::Dsf | DsdFileFormat::Dsdiff => true,
+            DsdFileFormat::Raw => false,
+        }
+    }
+}
+
+impl From<&PathBuf> for DsdFileFormat {
+    fn from(path: &PathBuf) -> Self {
+        if let Some(ext) = path.extension() {
+            match ext.to_ascii_lowercase().to_string_lossy().as_ref() {
+                "dsf" => DsdFileFormat::Dsf,
+                "dff" => DsdFileFormat::Dsdiff,
+                _ => DsdFileFormat::Raw,
+            }
+        } else {
+            DsdFileFormat::Raw
+        }
+    }
 }
 
 pub const DSD_64_RATE: u32 = 2822400;
@@ -159,4 +185,3 @@ impl DsdFile {
         }
     }
 }
-
