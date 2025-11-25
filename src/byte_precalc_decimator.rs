@@ -52,6 +52,8 @@ use crate::{FilterType, filters::{
     HTAPS_DSD256_64TO1_EQ, HTAPS_DSD256_128TO1_EQ, HTAPS_XLD,
 }};
 
+use dsd_reader::bit_reverse_u8;
+
 pub struct BytePrecalcDecimator {
     // Precomputed tables: tables[i][byte] gives partial sum for segment i
     tables: Vec<Box<[f64; 256]>>,
@@ -169,15 +171,6 @@ impl BytePrecalcDecimator {
         }
         produced
     }
-}
-
-#[inline]
-pub fn bit_reverse_u8(mut b: u8) -> u8 {
-    // Reverse bits in a byte (branchless, 3 shuffle steps)
-    b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
-    b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
-    b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
-    b
 }
 
 // Central mapping from (filter type, dsd_rate, decimation ratio) to half-tap tables.
