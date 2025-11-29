@@ -72,7 +72,7 @@ impl Rdsd2Pcm {
     /// * `base_dir` - Base directory for output files' relative paths
     /// * `in_path` - Optional path to input DSD file. `stdin` assumed if None. .dsd files are considered raw DSD.
     pub fn new(
-        bit_depth: i32,
+        bit_depth: usize,
         out_type: OutputType,
         level_db: f64,
         out_rate: u32,
@@ -82,7 +82,7 @@ impl Rdsd2Pcm {
         endianness: Endianness,
         dsd_rate: DsdRate,
         in_block_size: u32,
-        num_channels: u32,
+        num_channels: usize,
         filt_type: FilterType,
         append_rate_suffix: bool,
         base_dir: PathBuf,
@@ -123,7 +123,7 @@ impl Rdsd2Pcm {
     /// * `base_dir` - Base directory for output files' relative paths
     /// * `in_path` - Path to input DSD container file (e.g., .dsf or .dff)
     pub fn from_container(
-        bit_depth: i32,
+        bit_depth: usize,
         out_type: OutputType,
         level_db: f64,
         out_rate: u32,
@@ -152,7 +152,7 @@ impl Rdsd2Pcm {
 
     fn delegate_new(
         dsd_reader: DsdReader,
-        bit_depth: i32,
+        bit_depth: usize,
         out_type: OutputType,
         level_db: f64,
         out_rate: u32,

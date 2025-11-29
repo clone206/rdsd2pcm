@@ -93,7 +93,7 @@ impl ConversionContext {
     fn setup_resamplers(&mut self) -> Result<(), Box<dyn Error>> {
         if self.upsample_ratio > 1 {
             let mut resamplers = Vec::with_capacity(
-                self.dsd_reader.channels_num() as usize,
+                self.dsd_reader.channels_num(),
             );
             for _ in 0..self.dsd_reader.channels_num() {
                 resamplers.push(LMResampler::new(
@@ -146,7 +146,7 @@ impl ConversionContext {
     fn inc_bytes_read(&mut self, read_size: usize) {
         self.bytes_read += read_size as u64;
         self.chan_bits_read +=
-            (read_size as u64 / self.dsd_reader.channels_num() as u64) * 8;
+            (read_size / self.dsd_reader.channels_num()) as u64 * 8;
     }
 
     /// Main conversion driver code with optional percentage progress sender
@@ -189,7 +189,7 @@ impl ConversionContext {
         &mut self,
         sender: &Option<mpsc::Sender<f32>>,
     ) -> Result<(), Box<dyn Error>> {
-        let channels_num = self.dsd_reader.channels_num() as usize;
+        let channels_num = self.dsd_reader.channels_num();
         let reader = self.dsd_reader.dsd_iter()?;
 
         for (read_size, chan_bufs) in reader {
@@ -246,8 +246,8 @@ impl ConversionContext {
             }
         }
         return samples_used_per_chan
-            * self.pcm_writer.channels_num() as usize
-            * self.pcm_writer.bytes_per_sample() as usize;
+            * self.pcm_writer.channels_num()
+            * self.pcm_writer.bytes_per_sample();
     }
 
     // Unified per-channel processing: handles both LM (rational) and integer paths.

@@ -47,7 +47,7 @@ pub enum AudioFileFormat {
 pub struct AudioFile<T> {
     samples: Vec<Vec<T>>,
     sample_rate: u32,
-    bit_depth: i32,
+    bit_depth: usize,
     num_channels: usize,
 }
 
@@ -73,7 +73,7 @@ where
         self.samples.resize(channels, Vec::new());
     }
 
-    pub fn set_bit_depth(&mut self, depth: i32) {
+    pub fn set_bit_depth(&mut self, depth: usize) {
         self.bit_depth = depth;
     }
 
@@ -106,17 +106,17 @@ where
         // Use a large buffered writer (1 MiB); adjust if desired
         let mut w = BufWriter::with_capacity(1 << 20, file);
 
-        let channels = self.num_channels as u16;
+        let channels = self.num_channels;
         let bytes_per_sample = if self.bit_depth == 20 {
             3
         } else {
-            (self.bit_depth / 8) as u16
+            (self.bit_depth / 8)
         };
         let block_align = channels * bytes_per_sample;
         let frames = self.get_num_samples_per_channel();
         let data_size = (frames
             * self.num_channels
-            * bytes_per_sample as usize) as u32;
+            * bytes_per_sample) as u32;
         let file_size = data_size + 36;
 
         // RIFF header
@@ -144,7 +144,7 @@ where
         // Choose a frame block size that stays cache friendly
         const FRAME_BLOCK: usize = 16_384;
         let mut buf: Vec<u8> =
-            Vec::with_capacity(FRAME_BLOCK * block_align as usize);
+            Vec::with_capacity(FRAME_BLOCK * block_align);
 
         match self.bit_depth {
             16 => {
@@ -211,17 +211,17 @@ where
         let file = File::create(path)?;
         let mut w = BufWriter::with_capacity(1 << 20, file);
 
-        let channels = self.num_channels as u16;
+        let channels = self.num_channels;
         let bytes_per_sample = if self.bit_depth == 20 {
             3
         } else {
-            (self.bit_depth / 8) as u16
+            (self.bit_depth / 8)
         };
         let block_align = channels * bytes_per_sample;
         let frames = self.get_num_samples_per_channel();
         let data_size = (frames
             * self.num_channels
-            * bytes_per_sample as usize) as u32;
+            * bytes_per_sample) as u32;
 
         // FORM chunk
         w.write_all(b"FORM")?;
@@ -248,7 +248,7 @@ where
 
         const FRAME_BLOCK: usize = 16_384;
         let mut buf: Vec<u8> =
-            Vec::with_capacity(FRAME_BLOCK * block_align as usize);
+            Vec::with_capacity(FRAME_BLOCK * block_align);
 
         match self.bit_depth {
             16 => {
@@ -335,13 +335,13 @@ where
             ));
         }
 
-        let channels = self.num_channels as u32;
+        let channels = self.num_channels;
         let bps = bits_per_sample as u32;
         let bytes_per_sample = (if bits_per_sample == 20 {
             3
         } else {
             bits_per_sample / 8
-        }) as usize;
+        });
         let total_pcm_bytes =
             frames as u64 * channels as u64 * bytes_per_sample as u64;
 
@@ -373,7 +373,7 @@ where
 
         const FRAME_BLOCK: usize = 16_384;
         let mut buf: Vec<u8> = Vec::with_capacity(
-            FRAME_BLOCK * channels as usize * bytes_per_sample,
+            FRAME_BLOCK * channels * bytes_per_sample,
         );
 
         if bits_per_sample == 16 {

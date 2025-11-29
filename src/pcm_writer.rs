@@ -30,10 +30,10 @@ use std::{io, vec};
 pub struct PcmWriter {
     float_data: Vec<f64>,
     scale_factor: f64,
-    bits: i32,
-    channels_num: u32,
+    bits: usize,
+    channels_num: usize,
     rate: u32,
-    bytes_per_sample: i32,
+    bytes_per_sample: usize,
     output: OutputType,
     path: Option<PathBuf>,
     peak_level: i32,
@@ -52,13 +52,13 @@ impl PcmWriter {
     pub fn rate(&self) -> u32 {
         self.rate
     }
-    pub fn channels_num(&self) -> u32 {
+    pub fn channels_num(&self) -> usize {
         self.channels_num
     }
     pub fn clips(&self) -> i32 {
         self.clips
     }
-    pub fn bytes_per_sample(&self) -> i32 {
+    pub fn bytes_per_sample(&self) -> usize {
         self.bytes_per_sample
     }
     pub fn output(&self) -> OutputType {
@@ -75,14 +75,14 @@ impl PcmWriter {
     }
 
     pub fn new(
-        out_bits: i32,
+        out_bits: usize,
         out_type: OutputType,
         out_vol: f64,
         out_rate: u32,
         out_path: Option<PathBuf>,
         dither: Dither,
         out_frames_capacity: usize,
-        channels_num: u32,
+        channels_num: usize,
         upsample_ratio: u32,
     ) -> Result<Self, Box<dyn Error>> {
         if ![16, 20, 24, 32].contains(&out_bits) {
@@ -131,8 +131,8 @@ impl PcmWriter {
             stdout_buf: vec![
                 0u8;
                 out_frames_capacity
-                    * channels_num as usize
-                    * bytes_per_sample as usize
+                    * channels_num
+                    * bytes_per_sample
             ],
             vorbis: None,
             pictures: Vec::new(),
@@ -179,7 +179,7 @@ impl PcmWriter {
         let vol_scale = 10.0f64.powf(volume / 20.0);
 
         if self.bits != 32 {
-            self.scale_factor = 2.0f64.powi(self.bits - 1);
+            self.scale_factor = 2.0f64.powi(self.bits as i32 - 1);
         }
 
         self.peak_level = self.scale_factor.floor() as i32;
@@ -189,7 +189,7 @@ impl PcmWriter {
 
     fn set_file_params_float(&mut self) {
         if let Some(file) = &mut self.float_file {
-            file.set_num_channels(self.channels_num as usize);
+            file.set_num_channels(self.channels_num);
             file.set_bit_depth(self.bits);
             file.set_sample_rate(self.rate as u32);
         }
@@ -197,7 +197,7 @@ impl PcmWriter {
 
     fn set_file_params_int(&mut self) {
         if let Some(file) = &mut self.int_file {
-            file.set_num_channels(self.channels_num as usize);
+            file.set_num_channels(self.channels_num);
             file.set_bit_depth(self.bits);
             file.set_sample_rate(self.rate as u32);
         }
@@ -273,7 +273,7 @@ impl PcmWriter {
     }
 
     pub fn pack_int(&mut self, offset: &mut usize, value: i32) {
-        if *offset + self.bytes_per_sample as usize > self.stdout_buf.len()
+        if *offset + self.bytes_per_sample > self.stdout_buf.len()
         {
             return;
         }
@@ -296,7 +296,7 @@ impl PcmWriter {
             }
             _ => return,
         }
-        *offset += self.bytes_per_sample as usize;
+        *offset += self.bytes_per_sample;
     }
 
     pub fn write_stdout(
@@ -398,7 +398,7 @@ impl PcmWriter {
         // Output / packing for channel
         if self.output == OutputType::Stdout {
             // Interleave into pcm_data (handle float vs integer separately)
-            let bps = self.bytes_per_sample as usize; // 4 for 32-bit float
+            let bps = self.bytes_per_sample; // 4 for 32-bit float
             let mut pcm_pos = chan * bps;
             for s in 0..samples_used_per_chan {
                 let mut out_idx = pcm_pos;
@@ -414,7 +414,7 @@ impl PcmWriter {
                     let quantized = self.quantize(&mut qin);
                     self.pack_int(&mut out_idx, quantized);
                 }
-                pcm_pos += self.channels_num as usize * bps;
+                pcm_pos += self.channels_num * bps;
             }
         } else if self.bits == 32 {
             for s in 0..samples_used_per_chan {
