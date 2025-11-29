@@ -143,27 +143,26 @@ impl PcmWriter {
             dither,
             float_data: vec![0.0; out_frames_capacity],
         };
+        debug!("Dither type: {:#?}", ctx.dither.dither_type());
 
         ctx.set_scaling(out_vol, upsample_ratio);
-        ctx.init();
 
-        debug!(
-            "Dither type: {:#?}",
-            ctx.dither.dither_type()
-        );
+        if ctx.output != OutputType::Stdout {
+            ctx.init_file();
+        }
+
         Ok(ctx)
     }
 
-    fn init(&mut self) {
-        if self.output == OutputType::Stdout {
-            return;
-        }
+    fn init_file(&mut self) {
         if self.bits == 32 {
-            self.float_file = Some(AudioFile::new());
-            self.set_file_params_float();
+            let float_file =
+                AudioFile::new(self.channels_num, self.bits, self.rate);
+            self.float_file = Some(float_file);
         } else {
-            self.int_file = Some(AudioFile::new());
-            self.set_file_params_int();
+            let int_file =
+                AudioFile::new(self.channels_num, self.bits, self.rate);
+            self.int_file = Some(int_file);
         }
     }
 
@@ -185,22 +184,6 @@ impl PcmWriter {
         self.peak_level = self.scale_factor.floor() as i32;
         self.scale_factor *= vol_scale;
         self.scale_factor *= upsample_ratio as f64
-    }
-
-    fn set_file_params_float(&mut self) {
-        if let Some(file) = &mut self.float_file {
-            file.set_num_channels(self.channels_num);
-            file.set_bit_depth(self.bits);
-            file.set_sample_rate(self.rate as u32);
-        }
-    }
-
-    fn set_file_params_int(&mut self) {
-        if let Some(file) = &mut self.int_file {
-            file.set_num_channels(self.channels_num);
-            file.set_bit_depth(self.bits);
-            file.set_sample_rate(self.rate as u32);
-        }
     }
 
     pub fn save_file(&self, out_path: &PathBuf) -> Result<(), String> {
@@ -273,8 +256,7 @@ impl PcmWriter {
     }
 
     pub fn pack_int(&mut self, offset: &mut usize, value: i32) {
-        if *offset + self.bytes_per_sample > self.stdout_buf.len()
-        {
+        if *offset + self.bytes_per_sample > self.stdout_buf.len() {
             return;
         }
 

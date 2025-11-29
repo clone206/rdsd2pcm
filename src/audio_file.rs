@@ -59,26 +59,13 @@ where
         &mut self.samples
     }
 
-    pub fn new() -> Self {
+    pub fn new(channels: usize, depth: usize, rate: u32) -> Self {
         Self {
-            samples: vec![],
-            sample_rate: 44100,
-            bit_depth: 16,
-            num_channels: 0,
+            samples: vec![Vec::new(); channels],
+            sample_rate: rate,
+            bit_depth: depth,
+            num_channels: channels,
         }
-    }
-
-    pub fn set_num_channels(&mut self, channels: usize) {
-        self.num_channels = channels;
-        self.samples.resize(channels, Vec::new());
-    }
-
-    pub fn set_bit_depth(&mut self, depth: usize) {
-        self.bit_depth = depth;
-    }
-
-    pub fn set_sample_rate(&mut self, rate: u32) {
-        self.sample_rate = rate;
     }
 
     pub fn get_num_samples_per_channel(&self) -> usize {
