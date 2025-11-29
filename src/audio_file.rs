@@ -110,7 +110,7 @@ where
         let bytes_per_sample = if self.bit_depth == 20 {
             3
         } else {
-            (self.bit_depth / 8)
+            self.bit_depth / 8
         };
         let block_align = channels * bytes_per_sample;
         let frames = self.get_num_samples_per_channel();
@@ -129,16 +129,16 @@ where
         w.write_all(&16u32.to_le_bytes())?;
         let format_tag = if T::is_float() { 3u16 } else { 1u16 };
         w.write_all(&format_tag.to_le_bytes())?;
-        w.write_all(&channels.to_le_bytes())?;
+        w.write_all(&(channels as u16).to_le_bytes())?;
         w.write_all(&self.sample_rate.to_le_bytes())?;
         let byte_rate = self.sample_rate as u32 * block_align as u32;
         w.write_all(&byte_rate.to_le_bytes())?;
-        w.write_all(&block_align.to_le_bytes())?;
+        w.write_all(&(block_align as u16).to_le_bytes())?;
         w.write_all(&(self.bit_depth as u16).to_le_bytes())?;
 
         // data chunk
         w.write_all(b"data")?;
-        w.write_all(&data_size.to_le_bytes())?;
+        w.write_all(&(data_size as u32).to_le_bytes())?;
 
         // Stream samples in blocks to reduce temporary allocation
         // Choose a frame block size that stays cache friendly
@@ -215,7 +215,7 @@ where
         let bytes_per_sample = if self.bit_depth == 20 {
             3
         } else {
-            (self.bit_depth / 8)
+            self.bit_depth / 8
         };
         let block_align = channels * bytes_per_sample;
         let frames = self.get_num_samples_per_channel();
@@ -231,7 +231,7 @@ where
         // COMM chunk
         w.write_all(b"COMM")?;
         w.write_all(&18u32.to_be_bytes())?;
-        w.write_all(&channels.to_be_bytes())?;
+        w.write_all(&(channels as u16).to_be_bytes())?;
         w.write_all(&(frames as u32).to_be_bytes())?;
         w.write_all(&(self.bit_depth as u16).to_be_bytes())?;
 
@@ -337,11 +337,11 @@ where
 
         let channels = self.num_channels;
         let bps = bits_per_sample as u32;
-        let bytes_per_sample = (if bits_per_sample == 20 {
+        let bytes_per_sample = if bits_per_sample == 20 {
             3
         } else {
             bits_per_sample / 8
-        });
+        };
         let total_pcm_bytes =
             frames as u64 * channels as u64 * bytes_per_sample as u64;
 
