@@ -265,6 +265,17 @@ pub enum OutputType {
     Flac,
 }
 
+impl From<&str> for OutputType {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "wav" => OutputType::Wav,
+            "aiff" => OutputType::Aiff,
+            "flac" => OutputType::Flac,
+            _ => OutputType::Stdout,
+        }
+    }
+}
+
 /// Find all DSD files in the provided paths, optionally recursing into directories
 pub fn find_dsd_files(
     paths: &[PathBuf],
