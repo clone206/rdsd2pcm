@@ -29,6 +29,7 @@ mod filters_lm;
 mod lm_resampler;
 mod pcm_writer;
 
+use std::sync::atomic::AtomicBool;
 use std::{error::Error, fs, io, path::PathBuf, sync::mpsc};
 
 use crate::{
@@ -216,9 +217,10 @@ impl Rdsd2Pcm {
     /// * `percent_sender` - Optional channel sender for percentage progress updates.
     pub fn do_conversion(
         &mut self,
+        cancel_flag: &AtomicBool,
         percent_sender: Option<mpsc::Sender<f32>>,
     ) -> Result<(), Box<dyn Error>> {
-        self.conv_ctx.do_conversion(percent_sender)
+        self.conv_ctx.do_conversion(cancel_flag, percent_sender)
     }
 
     /// Get the input file name (or empty string for stdin)

@@ -34,6 +34,8 @@ use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::Instant;
 
@@ -152,12 +154,13 @@ impl ConversionContext {
     /// Main conversion driver code with optional percentage progress sender
     pub fn do_conversion(
         &mut self,
+        cancel_flag: &AtomicBool,
         sender: Option<mpsc::Sender<f32>>,
     ) -> Result<(), Box<dyn Error>> {
         self.check_conv()?;
         let wall_start = Instant::now();
 
-        self.process_blocks(&sender)?;
+        self.process_blocks(cancel_flag, &sender)?;
 
         if let Some(sender) = sender {
             sender.send(ONE_HUNDRED_PERCENT).ok();
@@ -187,12 +190,16 @@ impl ConversionContext {
     /// Main conversion loop with optional percentage progress sender
     fn process_blocks(
         &mut self,
+        cancel_flag: &AtomicBool,
         sender: &Option<mpsc::Sender<f32>>,
     ) -> Result<(), Box<dyn Error>> {
         let channels_num = self.dsd_reader.channels_num();
         let reader = self.dsd_reader.dsd_iter()?;
 
         for (read_size, chan_bufs) in reader {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Err("Conversion cancelled by user".to_string().into());
+            }
             let mut samples_used_per_chan = 0usize;
             for chan in 0..channels_num {
                 samples_used_per_chan =
