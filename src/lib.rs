@@ -272,7 +272,7 @@ impl From<&str> for OutputType {
     fn from(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "wav" => OutputType::Wav,
-            "aiff" => OutputType::Aiff,
+            "aif" => OutputType::Aiff,
             "flac" => OutputType::Flac,
             _ => OutputType::Stdout,
         }
