@@ -63,6 +63,7 @@ pub struct ConversionContext {
     chan_bits_read: u64,
     file_name_lossy: String,
     in_path_lossy: String,
+    out_filename_path: PathBuf,
 }
 impl ConversionContext {
     pub fn new(
@@ -97,9 +98,12 @@ impl ConversionContext {
             chan_bits_read: 0,
             file_name_lossy,
             in_path_lossy,
+            out_filename_path: PathBuf::new(),
         };
 
         ctx.setup_resamplers()?;
+
+        ctx.out_filename_path = ctx.get_out_filename_path();
 
         Ok(ctx)
     }
@@ -167,6 +171,23 @@ impl ConversionContext {
             (read_size / self.dsd_reader.channels_num()) as u64 * 8;
     }
 
+    // Send a > 100% progress update to signal we're in output file write phase
+    fn send_output_percent(
+        &self,
+        percent: f32,
+        sender: &Option<mpsc::Sender<ProgressUpdate>>,
+    ) {
+        if let Some(sender) = sender {
+            sender
+                .send(ProgressUpdate {
+                    in_path: self.in_path_lossy.clone(),
+                    file_name: self.out_filename_path.to_string_lossy().into_owned(),
+                    percent,
+                })
+                .ok();
+        }
+    }
+
     /// Main conversion driver code with optional percentage progress sender
     pub fn do_conversion(
         &mut self,
@@ -178,15 +199,7 @@ impl ConversionContext {
 
         self.process_blocks(cancel_flag, &sender)?;
 
-        if let Some(sender) = sender {
-            sender
-                .send(ProgressUpdate {
-                    in_path: self.in_path_lossy.clone(),
-                    file_name: self.file_name_lossy.clone(),
-                    percent: ONE_HUNDRED_PERCENT,
-                })
-                .ok();
-        }
+        self.send_output_percent(101.0, &sender);
 
         let dsp_elapsed = wall_start.elapsed();
 
@@ -201,6 +214,9 @@ impl ConversionContext {
         {
             error!("Error writing file: {e}");
         }
+
+        self.send_output_percent(101.0, &sender);
+
         let total_elapsed = wall_start.elapsed();
 
         self.report_timing(dsp_elapsed, total_elapsed);
@@ -448,9 +464,7 @@ impl ConversionContext {
             .unwrap_or(Path::new(""));
 
         let out_dir = self.derive_output_dir(parent)?;
-        let out_filename = self.get_out_filename_path();
-
-        let out_path = out_dir.join(&out_filename);
+        let out_path = out_dir.join(&self.out_filename_path);
 
         debug!("Derived output path: {}", out_path.display());
 
