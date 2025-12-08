@@ -198,7 +198,6 @@ impl ConversionContext {
         let wall_start = Instant::now();
 
         self.process_blocks(cancel_flag, &sender)?;
-
         self.send_output_percent(101.0, &sender);
 
         let dsp_elapsed = wall_start.elapsed();
