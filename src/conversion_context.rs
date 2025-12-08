@@ -254,6 +254,9 @@ impl ConversionContext {
                 self.pcm_writer.write_stdout(pcm_frame_bytes)?;
             }
         }
+        
+        self.send_output_percent(ONE_HUNDRED_PERCENT, sender);
+
         Ok(())
     }
 
