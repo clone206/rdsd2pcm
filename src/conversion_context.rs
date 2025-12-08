@@ -21,10 +21,10 @@ use crate::ONE_HUNDRED_PERCENT;
 use crate::OutputType;
 use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::byte_precalc_decimator::select_precalc_taps;
-use dsd_reader::dsd_file::DSD_64_RATE;
-use dsd_reader::DsdReader;
 use crate::lm_resampler::LMResampler;
 use crate::pcm_writer::PcmWriter;
+use dsd_reader::DsdReader;
+use dsd_reader::dsd_file::DSD_64_RATE;
 use id3::TagLike;
 use log::error;
 use log::warn;
@@ -41,6 +41,12 @@ use std::time::Instant;
 
 const RETRIES: usize = 1; // Max retries for progress send
 
+pub struct ProgressUpdate {
+    pub in_path: String,
+    pub file_name: String,
+    pub percent: f32,
+}
+
 pub struct ConversionContext {
     dsd_reader: DsdReader,
     pcm_writer: PcmWriter,
@@ -55,6 +61,8 @@ pub struct ConversionContext {
     base_dir: PathBuf,
     bytes_read: u64,
     chan_bits_read: u64,
+    file_name_lossy: String,
+    in_path_lossy: String,
 }
 impl ConversionContext {
     pub fn new(
@@ -66,6 +74,13 @@ impl ConversionContext {
         decim_ratio: i32,
         upsample_ratio: u32,
     ) -> Result<Self, Box<dyn Error>> {
+        let file_name_lossy =
+            dsd_reader.file_name().to_string_lossy().into_owned();
+        let in_path_lossy = if let Some(in_path) = dsd_reader.in_path() {
+            in_path.to_string_lossy().into_owned()
+        } else {
+            String::from("stdin")
+        };
         let mut ctx = Self {
             dsd_reader,
             pcm_writer,
@@ -80,6 +95,8 @@ impl ConversionContext {
             base_dir,
             bytes_read: 0,
             chan_bits_read: 0,
+            file_name_lossy,
+            in_path_lossy,
         };
 
         ctx.setup_resamplers()?;
@@ -89,14 +106,13 @@ impl ConversionContext {
 
     /// Get input file name for display purposes (potentially lossy)
     pub fn file_name_lossy(&self) -> String {
-        self.dsd_reader.file_name().to_string_lossy().into_owned()
+        self.file_name_lossy.clone()
     }
 
     fn setup_resamplers(&mut self) -> Result<(), Box<dyn Error>> {
         if self.upsample_ratio > 1 {
-            let mut resamplers = Vec::with_capacity(
-                self.dsd_reader.channels_num(),
-            );
+            let mut resamplers =
+                Vec::with_capacity(self.dsd_reader.channels_num());
             for _ in 0..self.dsd_reader.channels_num() {
                 resamplers.push(LMResampler::new(
                     self.upsample_ratio,
@@ -155,7 +171,7 @@ impl ConversionContext {
     pub fn do_conversion(
         &mut self,
         cancel_flag: &AtomicBool,
-        sender: Option<mpsc::Sender<f32>>,
+        sender: Option<mpsc::Sender<ProgressUpdate>>,
     ) -> Result<(), Box<dyn Error>> {
         self.check_conv()?;
         let wall_start = Instant::now();
@@ -163,7 +179,13 @@ impl ConversionContext {
         self.process_blocks(cancel_flag, &sender)?;
 
         if let Some(sender) = sender {
-            sender.send(ONE_HUNDRED_PERCENT).ok();
+            sender
+                .send(ProgressUpdate {
+                    in_path: self.in_path_lossy.clone(),
+                    file_name: self.file_name_lossy.clone(),
+                    percent: ONE_HUNDRED_PERCENT,
+                })
+                .ok();
         }
 
         let dsp_elapsed = wall_start.elapsed();
@@ -191,14 +213,16 @@ impl ConversionContext {
     fn process_blocks(
         &mut self,
         cancel_flag: &AtomicBool,
-        sender: &Option<mpsc::Sender<f32>>,
+        sender: &Option<mpsc::Sender<ProgressUpdate>>,
     ) -> Result<(), Box<dyn Error>> {
         let channels_num = self.dsd_reader.channels_num();
         let reader = self.dsd_reader.dsd_iter()?;
 
         for (read_size, chan_bufs) in reader {
             if cancel_flag.load(Ordering::Relaxed) {
-                return Err("Conversion cancelled by user".to_string().into());
+                return Err("Conversion cancelled by user"
+                    .to_string()
+                    .into());
             }
             let mut samples_used_per_chan = 0usize;
             for chan in 0..channels_num {
@@ -223,7 +247,7 @@ impl ConversionContext {
         &mut self,
         read_size: usize,
         samples_used_per_chan: usize,
-        sender: &Option<mpsc::Sender<f32>>,
+        sender: &Option<mpsc::Sender<ProgressUpdate>>,
     ) -> usize {
         self.inc_bytes_read(read_size);
         self.diag_expected_frames_floor = (self.chan_bits_read
@@ -233,11 +257,15 @@ impl ConversionContext {
 
         if let Some(sender) = sender {
             for i in 0..=RETRIES {
-                match sender.send(
-                    (self.bytes_read as f32
-                        / self.dsd_reader.audio_length() as f32)
-                        * ONE_HUNDRED_PERCENT,
-                ) {
+                match sender.send({
+                    ProgressUpdate {
+                        percent: (self.bytes_read as f32
+                            / self.dsd_reader.audio_length() as f32)
+                            * ONE_HUNDRED_PERCENT,
+                        in_path: self.in_path_lossy.clone(),
+                        file_name: self.file_name_lossy.clone(),
+                    }
+                }) {
                     Ok(_) => break,
                     Err(_) => {
                         if i == RETRIES {
@@ -543,10 +571,7 @@ impl ConversionContext {
         let s = total_secs % 60;
         debug!(
             "{} bytes processed in {:02}:{:02}:{:02}",
-            self.bytes_read,
-            h,
-            m,
-            s,
+            self.bytes_read, h, m, s,
         );
         info!(
             "DSP speed for {}: {:.2}x, End-to-end: {:.2}x",
@@ -577,9 +602,7 @@ impl ConversionContext {
         trace!("Output length accounting:");
         trace!(
             "DSD bits in per channel: {}  L={}  M={}",
-            self.chan_bits_read,
-            self.upsample_ratio,
-            self.decim_ratio
+            self.chan_bits_read, self.upsample_ratio, self.decim_ratio
         );
         trace!(
             "Expected frames (floor): {}  Actual frames: {}  Diff: {} ({:.5}%)",

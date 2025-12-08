@@ -32,6 +32,7 @@ mod pcm_writer;
 use std::sync::atomic::AtomicBool;
 use std::{error::Error, fs, io, path::PathBuf, sync::mpsc};
 
+pub use crate::conversion_context::ProgressUpdate;
 use crate::{
     conversion_context::ConversionContext, dither::Dither,
     lm_resampler::compute_decim_and_upsample,
@@ -218,7 +219,7 @@ impl Rdsd2Pcm {
     pub fn do_conversion(
         &mut self,
         cancel_flag: &AtomicBool,
-        percent_sender: Option<mpsc::Sender<f32>>,
+        percent_sender: Option<mpsc::Sender<ProgressUpdate>>,
     ) -> Result<(), Box<dyn Error>> {
         self.conv_ctx.do_conversion(cancel_flag, percent_sender)
     }
