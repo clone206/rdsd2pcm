@@ -543,7 +543,7 @@ impl ConversionContext {
 
     fn check_conv(&self) -> Result<(), Box<dyn Error>> {
         if let Some(path) = &self.dsd_reader.in_path()
-            && !path.canonicalize()?.starts_with(&self.base_dir)
+            && !path.canonicalize()?.starts_with(&self.base_dir.canonicalize()?)
         {
             return Err(format!(
                 "Input file '{}' is outside the base directory of '{}'.",
