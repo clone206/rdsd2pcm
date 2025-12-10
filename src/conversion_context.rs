@@ -381,11 +381,20 @@ impl ConversionContext {
         parent: &Path,
     ) -> Result<PathBuf, Box<dyn Error>> {
         if let Some(out_dir) = self.pcm_writer.path() {
+            trace!("Out dir present: {}", out_dir.display());
             if self.dsd_reader.std_in() {
                 return Ok(out_dir.clone());
             }
+            let base_dir = self.base_dir.canonicalize()?;
             let rel =
-                parent.strip_prefix(&self.base_dir).unwrap_or(parent);
+                parent.strip_prefix(&base_dir).unwrap_or(parent);
+            
+            trace!(
+                "Relative path from base dir '{}' to input parent '{}' is '{}'",
+                base_dir.display(),
+                parent.display(),
+                rel.display()
+            );
             let full_dir = Path::new(out_dir).join(rel);
 
             if !full_dir.exists() {
@@ -395,6 +404,7 @@ impl ConversionContext {
         } else if self.dsd_reader.std_in() {
             Ok(PathBuf::from(""))
         } else {
+            trace!("No Out dir present. Same as input.");
             Ok(parent.to_path_buf())
         }
     }

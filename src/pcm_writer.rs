@@ -108,15 +108,18 @@ impl PcmWriter {
         let bytes_per_sample =
             if out_bits == 20 { 3 } else { out_bits / 8 };
 
-        if let Some(p) = &out_path
-            && !p.exists()
-        {
-            return Err(format!(
-                "Specified output path does not exist: {}",
-                p.display()
-            )
-            .into());
-        }
+        let canon_path = if let Some(p) = &out_path {
+            if !p.exists() {
+                return Err(format!(
+                    "Specified output path does not exist: {}",
+                    p.display()
+                )
+                .into());
+            }
+            Some(p.canonicalize()?)
+        } else {
+            None
+        };
 
         let mut ctx = Self {
             bits: out_bits,
@@ -136,7 +139,7 @@ impl PcmWriter {
             ],
             vorbis: None,
             pictures: Vec::new(),
-            path: out_path,
+            path: canon_path,
             last_samps_clipped_low: 0,
             last_samps_clipped_high: 0,
             clips: 0,
