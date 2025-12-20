@@ -52,8 +52,6 @@ use crate::{FilterType, filters::{
     HTAPS_DSD256_64TO1_EQ, HTAPS_DSD256_128TO1_EQ, HTAPS_XLD,
 }};
 
-use dsd_reader::bit_reverse_u8;
-
 pub struct BytePrecalcDecimator {
     // Precomputed tables: tables[i][byte] gives partial sum for segment i
     tables: Vec<Box<[f64; 256]>>,
@@ -78,7 +76,7 @@ impl BytePrecalcDecimator {
         }
         // Number of 8-bit windows covering half the filter
         let num_tables = (half + 7) / 8;
-        // Precompute 256-entry table for each window (like C precalc)
+        // Precompute 256-entry table for each window 
         let mut tables: Vec<Box<[f64; 256]>> =
             Vec::with_capacity(num_tables);
         for t in 0..num_tables {
@@ -88,13 +86,12 @@ impl BytePrecalcDecimator {
             // Table index is reversed order (ctx->numTables-1 - t) in C; we can mimic
             // by pushing and later indexing appropriately. Simpler: store in reverse now.
             let mut arr = Box::new([0.0f64; 256]);
-            for dsd_seq in 0..256u16 {
+            for dsd_seq in 0..256i16 {
                 let mut acc = 0.0;
                 for bit in 0..k {
-                    let bit_is_one = (dsd_seq >> bit) & 1;
                     // Map 0 -> -1, 1 -> +1
-                    let sample = if bit_is_one != 0 { 1.0 } else { -1.0 };
-                    acc += sample * second_half_taps[base + bit];
+                    let sample = ((dsd_seq >> bit) & 1) * 2 - 1;
+                    acc += sample as f64 * second_half_taps[base + bit];
                 }
                 arr[dsd_seq as usize] = acc;
             }
@@ -153,7 +150,7 @@ impl BytePrecalcDecimator {
                     let byte2 = self.fifo[idx2];
                     // Table i corresponds to tables[i]; mirrored byte must be bit-reversed
                     acc += self.tables[i][byte1 as usize]
-                        + self.tables[i][bit_reverse_u8(byte2) as usize];
+                        + self.tables[i][byte2.reverse_bits() as usize];
                 }
 
                 // Handle startup latency (group delay)
