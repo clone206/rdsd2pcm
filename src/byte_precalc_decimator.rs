@@ -40,7 +40,6 @@ or implied, of Sebastian Gesemann.
 // Assumptions:
 // - Filter specified by right-half taps (second_half_taps), even full length = 2 * len.
 // - decim is an integer multiple of 8 (16, 32, 64, etc).
-// - No zero insertion; feed raw DSD bytes in arrival order.
 // - Produces one output per 'decim' input bits (decim/8 bytes).
 // ============================================================================
 
@@ -79,40 +78,35 @@ impl BytePrecalcDecimator {
         }
         // Number of 8-bit windows covering half the filter
         let num_tables = (half + 7) / 8;
-        // Precompute 256-entry table for each window
-        let tables: Vec<Box<[f64]>> = (0..num_tables)
-            // Reverse to align with C's tableIdx = numTables - 1 - t
-            .rev()
-            .map(|t| t * 8)
-            .map(|t| {
-                // Table index is reversed order (ctx->numTables-1 - t) in C; we can mimic
-                // by pushing and later indexing appropriately. Simpler: store in reverse now.
-                (0..256i16)
-                    .map(|dsd_seq| {
-                        (0..half.saturating_sub(t).min(8)).fold(
-                            0.0f64,
-                            |acc, bit| 
-                                // Map 0 -> -1, 1 -> +1 and multiply/accumulate
-                                acc + (((dsd_seq >> bit) & 1) * 2 - 1)
-                                    as f64
-                                    * second_half_taps[t + bit]
-                        )
-                    })
-                    .collect::<Vec<f64>>()
-                    .into_boxed_slice()
-            })
-            .collect();
-
-        let full_len = (half * 2) as u64;
-        let delay = (full_len - 1) / 2;
 
         Some(Self {
-            tables,
+            tables: (0..num_tables)
+                // Reverse to align with C's tableIdx = numTables - 1 - t
+                .rev()
+                .map(|t| t * 8)
+                .map(|t| {
+                    // Table index is reversed order (ctx->numTables-1 - t) in C; we can mimic
+                    // by pushing and later indexing appropriately. Simpler: store in reverse now.
+                    (0..256i16)
+                        .map(|dsd_seq| {
+                            (0..half.saturating_sub(t).min(8)).fold(
+                                0.0f64,
+                                |acc, bit| 
+                                    // Map 0 -> -1, 1 -> +1 and multiply/accumulate
+                                    acc + (((dsd_seq >> bit) & 1) * 2 - 1)
+                                        as f64
+                                        * second_half_taps[t + bit]
+                            )
+                        })
+                        .collect::<Vec<f64>>()
+                        .into_boxed_slice()
+                })
+                .collect(),
             num_tables,
             bytes_per_out: decim / 8,
             fifo: vec![0u8; (num_tables * 2 + 8).next_power_of_two()], // simple ring
             fifo_pos: 0,
-            delay_count: delay,
+            delay_count: ((half * 2 - 1) / 2) as u64,
             table_span: num_tables * 2 - 1,
         })
     }
