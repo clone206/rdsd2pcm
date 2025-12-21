@@ -55,8 +55,6 @@ use crate::{
     },
 };
 
-use std::convert::TryInto;
-
 pub struct BytePrecalcDecimator {
     // Precomputed tables: tables[i][byte] gives partial sum for segment i
     tables: Vec<Box<[f64]>>,
