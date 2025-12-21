@@ -91,13 +91,11 @@ impl BytePrecalcDecimator {
                     .map(|dsd_seq| {
                         (0..half.saturating_sub(t).min(8)).fold(
                             0.0f64,
-                            |acc, bit| {
-                                // Map 0 -> -1, 1 -> +1
-                                let sample =
-                                    ((dsd_seq >> bit) & 1) * 2 - 1;
-                                acc + sample as f64
+                            |acc, bit| 
+                                // Map 0 -> -1, 1 -> +1 and multiply/accumulate
+                                acc + (((dsd_seq >> bit) & 1) * 2 - 1)
+                                    as f64
                                     * second_half_taps[t + bit]
-                            },
                         )
                     })
                     .collect::<Vec<f64>>()
