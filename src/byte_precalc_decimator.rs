@@ -44,17 +44,22 @@ or implied, of Sebastian Gesemann.
 // - Produces one output per 'decim' input bits (decim/8 bytes).
 // ============================================================================
 
-use crate::{FilterType, filters::{
-    HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB,
-    HTAPS_DDR_16TO1_EQ, HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ,
-    HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ, HTAPS_DSD64_8TO1_EQ,
-    HTAPS_DSD64_16TO1_EQ, HTAPS_DSD64_32TO1_EQ, HTAPS_DSD256_32TO1_EQ,
-    HTAPS_DSD256_64TO1_EQ, HTAPS_DSD256_128TO1_EQ, HTAPS_XLD,
-}};
+use crate::{
+    FilterType,
+    filters::{
+        HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB,
+        HTAPS_DDR_16TO1_EQ, HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ,
+        HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ, HTAPS_DSD64_8TO1_EQ,
+        HTAPS_DSD64_16TO1_EQ, HTAPS_DSD64_32TO1_EQ, HTAPS_DSD256_32TO1_EQ,
+        HTAPS_DSD256_64TO1_EQ, HTAPS_DSD256_128TO1_EQ, HTAPS_XLD,
+    },
+};
+
+use std::convert::TryInto;
 
 pub struct BytePrecalcDecimator {
     // Precomputed tables: tables[i][byte] gives partial sum for segment i
-    tables: Vec<Box<[f64; 256]>>,
+    tables: Vec<Box<[f64]>>,
     num_tables: usize,
     bytes_per_out: u32,
     fifo: Vec<u8>,
@@ -76,32 +81,35 @@ impl BytePrecalcDecimator {
         }
         // Number of 8-bit windows covering half the filter
         let num_tables = (half + 7) / 8;
-        // Precompute 256-entry table for each window 
-        let mut tables: Vec<Box<[f64; 256]>> =
-            Vec::with_capacity(num_tables);
-        for t in 0..num_tables {
-            let base = t * 8;
-            let remain = half.saturating_sub(base);
-            let k = remain.min(8); // up to 8 taps in this window
-            // Table index is reversed order (ctx->numTables-1 - t) in C; we can mimic
-            // by pushing and later indexing appropriately. Simpler: store in reverse now.
-            let mut arr = Box::new([0.0f64; 256]);
-            for dsd_seq in 0..256i16 {
-                let mut acc = 0.0;
-                for bit in 0..k {
-                    // Map 0 -> -1, 1 -> +1
-                    let sample = ((dsd_seq >> bit) & 1) * 2 - 1;
-                    acc += sample as f64 * second_half_taps[base + bit];
-                }
-                arr[dsd_seq as usize] = acc;
-            }
-            tables.push(arr);
-        }
-        // Reverse to align with C's tableIdx = numTables - 1 - t
-        tables.reverse();
+        // Precompute 256-entry table for each window
+        let tables: Vec<Box<[f64]>> = (0..num_tables)
+            // Reverse to align with C's tableIdx = numTables - 1 - t
+            .rev()
+            .map(|t| t * 8)
+            .map(|t| {
+                // Table index is reversed order (ctx->numTables-1 - t) in C; we can mimic
+                // by pushing and later indexing appropriately. Simpler: store in reverse now.
+                (0..256i16)
+                    .map(|dsd_seq| {
+                        (0..half.saturating_sub(t).min(8)).fold(
+                            0.0f64,
+                            |acc, bit| {
+                                // Map 0 -> -1, 1 -> +1
+                                let sample =
+                                    ((dsd_seq >> bit) & 1) * 2 - 1;
+                                acc + sample as f64
+                                    * second_half_taps[t + bit]
+                            },
+                        )
+                    })
+                    .collect::<Vec<f64>>()
+                    .into_boxed_slice()
+            })
+            .collect();
 
         let full_len = (half * 2) as u64;
         let delay = (full_len - 1) / 2;
+
         Some(Self {
             tables,
             num_tables,
@@ -136,29 +144,27 @@ impl BytePrecalcDecimator {
             if byte_count_in_frame == self.bytes_per_out {
                 byte_count_in_frame = 0;
 
-                // Accumulate mirrored table contributions
-                let mut acc = 0.0;
-                // Current position is one past last written
-                let cur = self.fifo_pos;
-                for i in 0..self.num_tables {
-                    // Recent window i
-                    let idx1 = cur.wrapping_sub(1 + i) & mask;
-                    // Mirrored window
-                    let idx2 =
-                        cur.wrapping_sub(1 + (self.table_span - i)) & mask;
-                    let byte1 = self.fifo[idx1];
-                    let byte2 = self.fifo[idx2];
-                    // Table i corresponds to tables[i]; mirrored byte must be bit-reversed
-                    acc += self.tables[i][byte1 as usize]
-                        + self.tables[i][byte2.reverse_bits() as usize];
-                }
-
                 // Handle startup latency (group delay)
                 if self.delay_count > 0 {
                     self.delay_count -= 1;
-                }
-                else if produced < out.len() {
-                    out[produced] = acc;
+                } else if produced < out.len() {
+                    out[produced] =
+                        (0..self.num_tables).fold(0.0f64, |acc, i| {
+                            // Recent window i
+                            let idx1 =
+                                self.fifo_pos.wrapping_sub(1 + i) & mask;
+                            // Mirrored window
+                            let idx2 = self
+                                .fifo_pos
+                                .wrapping_sub(1 + (self.table_span - i))
+                                & mask;
+                            let byte1 = self.fifo[idx1];
+                            let byte2 = self.fifo[idx2];
+                            // Table i corresponds to tables[i]; mirrored byte must be bit-reversed
+                            acc + self.tables[i][byte1 as usize]
+                                + self.tables[i]
+                                    [byte2.reverse_bits() as usize]
+                        });
                     produced += 1;
                 }
                 if produced == out.len() {
@@ -182,8 +188,7 @@ pub fn select_precalc_taps(
         128 => {
             if filt_type == FilterType::Equiripple && dsd_rate == 4 {
                 Some(&HTAPS_DSD256_128TO1_EQ)
-            }
-            else {
+            } else {
                 None
             }
         }
@@ -196,8 +201,7 @@ pub fn select_precalc_taps(
                     FilterType::Equiripple => Some(&HTAPS_DSD64_8TO1_EQ),
                     _ => None,
                 }
-            }
-            else {
+            } else {
                 None
             }
         }
@@ -208,11 +212,9 @@ pub fn select_precalc_taps(
             FilterType::Equiripple => {
                 if dsd_rate == 1 {
                     Some(&HTAPS_DSD64_16TO1_EQ)
-                }
-                else if dsd_rate == 2 {
+                } else if dsd_rate == 2 {
                     Some(&HTAPS_DDR_16TO1_EQ)
-                }
-                else {
+                } else {
                     None
                 }
             }
@@ -220,8 +222,7 @@ pub fn select_precalc_taps(
             FilterType::Chebyshev => {
                 if dsd_rate == 2 {
                     Some(&HTAPS_DDR_16TO1_CHEB)
-                }
-                else {
+                } else {
                     None
                 }
             }
@@ -233,12 +234,10 @@ pub fn select_precalc_taps(
             FilterType::Equiripple => {
                 if dsd_rate == 1 {
                     Some(&HTAPS_DSD64_32TO1_EQ)
-                }
-                else if dsd_rate == 4 {
+                } else if dsd_rate == 4 {
                     // New dedicated DSD256 32:1 equiripple half taps
                     Some(&HTAPS_DSD256_32TO1_EQ)
-                }
-                else {
+                } else {
                     Some(&HTAPS_DDR_32TO1_EQ)
                 }
             }
@@ -250,8 +249,7 @@ pub fn select_precalc_taps(
             FilterType::Equiripple => {
                 if dsd_rate == 4 {
                     Some(&HTAPS_DSD256_64TO1_EQ)
-                }
-                else {
+                } else {
                     Some(&HTAPS_DDR_64TO1_EQ)
                 }
             }
