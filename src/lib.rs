@@ -112,6 +112,49 @@ impl Rdsd2Pcm {
         )
     }
 
+    /// Create a new Rdsd2Pcm conversion context for level checking only.
+    /// * `out_rate` - Output PCM sample rate
+    /// * `in_path` - Optional path to input DSD file. `stdin` assumed if None. .dsd files are considered raw DSD.
+    /// * `in_format` - Input DSD format (planar or interleaved)
+    /// * `endianness` - Input DSD endianness (most significant bit first, or least significant bit first)
+    /// * `num_channels` - Number of input channels
+    /// * `in_block_size` - Input DSD block size in bytes
+    /// * `dsd_rate` - Input DSD sample rate (DSD64, DSD128, or DSD256 allowed)
+    pub fn new_level_check(
+        out_rate: u32,
+        in_path: Option<PathBuf>,
+        in_format: FmtType,
+        endianness: Endianness,
+        num_channels: usize,
+        in_block_size: u32,
+        dsd_rate: DsdRate,
+    ) -> Result<Self, Box<dyn Error>> {
+        let dsd_reader = DsdReader::new(
+            in_path,
+            in_format,
+            endianness,
+            dsd_rate,
+            in_block_size,
+            num_channels,
+        )?;
+
+        let base_dir = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+        Self::delegate_new(
+            dsd_reader,
+            32,                 // bit depth unused for level check
+            OutputType::Stdout, // output type unused for level check
+            0.0,                // level db unused for level check
+            out_rate,
+            None,             // out path unused for level check
+            DitherType::None, // dither unused for level check
+            FilterType::Equiripple,
+            false,
+            base_dir,
+        )
+    }
+
     /// Create a new Rdsd2Pcm conversion context using a container file as input.
     /// * `bit_depth` - Output PCM bit depth
     /// * `out_type` - Output type (audio file or stdout)

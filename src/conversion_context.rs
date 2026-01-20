@@ -227,8 +227,7 @@ impl ConversionContext {
                 // Scan peak from the samples produced for this channel.
                 // Note: `process_channel` writes into `pcm_writer.float_data`.
                 let float_data = self.pcm_writer.float_data_mut();
-                let valid = samples_used_per_chan.min(float_data.len());
-                for &s in &float_data[..valid] {
+                for &s in &float_data[..samples_used_per_chan] {
                     let a = s.abs();
                     if a > peak_abs {
                         peak_abs = a;
