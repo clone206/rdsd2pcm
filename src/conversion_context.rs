@@ -181,11 +181,74 @@ impl ConversionContext {
             sender
                 .send(ProgressUpdate {
                     in_path: self.in_path_lossy.clone(),
-                    file_name: self.out_filename_path.to_string_lossy().into_owned(),
+                    file_name: self
+                        .out_filename_path
+                        .to_string_lossy()
+                        .into_owned(),
                     percent,
                 })
                 .ok();
         }
+    }
+
+    pub fn check_level(
+        &mut self,
+        cancel_flag: &AtomicBool,
+        sender: Option<mpsc::Sender<ProgressUpdate>>,
+    ) -> Result<f32, Box<dyn Error>> {
+        let peak = self.process_levels(cancel_flag, &sender)?;
+        self.send_output_percent(101.0, &sender);
+        self.send_output_percent(101.0, &sender);
+        Ok(peak)
+    }
+
+    fn process_levels(
+        &mut self,
+        cancel_flag: &AtomicBool,
+        sender: &Option<mpsc::Sender<ProgressUpdate>>,
+    ) -> Result<f32, Box<dyn Error>> {
+        let channels_num = self.dsd_reader.channels_num();
+        let reader = self.dsd_reader.dsd_iter()?;
+
+        // Convert internal float buffer units to normalized PCM units (±1.0 full scale).
+        let mut peak_abs: f64 = 0.0;
+
+        for (read_size, chan_bufs) in reader {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Err("Level check cancelled by user"
+                    .to_string()
+                    .into());
+            }
+            let mut samples_used_per_chan = 0usize;
+            for chan in 0..channels_num {
+                samples_used_per_chan =
+                    self.process_channel(chan, &chan_bufs[chan])?;
+
+                // Scan peak from the samples produced for this channel.
+                // Note: `process_channel` writes into `pcm_writer.float_data`.
+                let float_data = self.pcm_writer.float_data_mut();
+                let valid = samples_used_per_chan.min(float_data.len());
+                for &s in &float_data[..valid] {
+                    let a = s.abs();
+                    if a > peak_abs {
+                        peak_abs = a;
+                    }
+                }
+            }
+
+            // Progress accounting (also updates internal bytes/bits counters).
+            let _ = self.track_io(read_size, samples_used_per_chan, sender);
+        }
+
+        self.send_output_percent(ONE_HUNDRED_PERCENT, sender);
+
+        let peak_dbfs = if peak_abs <= 0.0 {
+            f32::NEG_INFINITY
+        } else {
+            (20.0 * peak_abs.log10()) as f32
+        };
+
+        Ok(peak_dbfs)
     }
 
     /// Main conversion driver code with optional percentage progress sender
@@ -254,7 +317,7 @@ impl ConversionContext {
                 self.pcm_writer.write_stdout(pcm_frame_bytes)?;
             }
         }
-        
+
         self.send_output_percent(ONE_HUNDRED_PERCENT, sender);
 
         Ok(())
@@ -386,9 +449,8 @@ impl ConversionContext {
                 return Ok(out_dir.clone());
             }
             let base_dir = self.base_dir.canonicalize()?;
-            let rel =
-                parent.strip_prefix(&base_dir).unwrap_or(parent);
-            
+            let rel = parent.strip_prefix(&base_dir).unwrap_or(parent);
+
             trace!(
                 "Relative path from base dir '{}' to input parent '{}' is '{}'",
                 base_dir.display(),
@@ -553,7 +615,9 @@ impl ConversionContext {
 
     fn check_conv(&self) -> Result<(), Box<dyn Error>> {
         if let Some(path) = &self.dsd_reader.in_path()
-            && !path.canonicalize()?.starts_with(&self.base_dir.canonicalize()?)
+            && !path
+                .canonicalize()?
+                .starts_with(&self.base_dir.canonicalize()?)
         {
             return Err(format!(
                 "Input file '{}' is outside the base directory of '{}'.",

@@ -35,13 +35,12 @@ use std::{error::Error, fs, io, path::PathBuf, sync::mpsc};
 pub use crate::conversion_context::ProgressUpdate;
 use crate::{
     conversion_context::ConversionContext, dither::Dither,
-    lm_resampler::compute_decim_and_upsample,
-    pcm_writer::PcmWriter,
+    lm_resampler::compute_decim_and_upsample, pcm_writer::PcmWriter,
 };
 
 pub use dsd_reader::DsdRate;
-pub use dsd_reader::{DsdReader, Endianness, FmtType};
 pub use dsd_reader::dsd_file::{DsdFileFormat, FormatExtensions};
+pub use dsd_reader::{DsdReader, Endianness, FmtType};
 
 /// `100.0`
 pub const ONE_HUNDRED_PERCENT: f32 = 100.0;
@@ -215,6 +214,7 @@ impl Rdsd2Pcm {
     }
 
     /// Perform the conversion from DSD to PCM
+    /// * `cancel_flag` - AtomicBool flag to signal cancellation of conversion
     /// * `percent_sender` - Optional channel sender for percentage progress updates.
     pub fn do_conversion(
         &mut self,
@@ -222,6 +222,17 @@ impl Rdsd2Pcm {
         percent_sender: Option<mpsc::Sender<ProgressUpdate>>,
     ) -> Result<(), Box<dyn Error>> {
         self.conv_ctx.do_conversion(cancel_flag, percent_sender)
+    }
+
+    /// Check the peak level of the input DSD file without performing full conversion.
+    /// * `cancel_flag` - AtomicBool flag to signal cancellation of level check
+    /// * `percent_sender` - Optional channel sender for percentage progress updates.
+    pub fn check_level(
+        &mut self,
+        cancel_flag: &AtomicBool,
+        percent_sender: Option<mpsc::Sender<ProgressUpdate>>,
+    ) -> Result<f32, Box<dyn Error>> {
+        self.conv_ctx.check_level(cancel_flag, percent_sender)
     }
 
     /// Get the input file name (or empty string for stdin)
