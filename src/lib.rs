@@ -109,6 +109,7 @@ impl Rdsd2Pcm {
             filt_type,
             append_rate_suffix,
             base_dir,
+            false,
         )
     }
 
@@ -152,6 +153,7 @@ impl Rdsd2Pcm {
             FilterType::Equiripple,
             false,
             base_dir,
+            true,
         )
     }
 
@@ -191,6 +193,7 @@ impl Rdsd2Pcm {
             filt_type,
             append_rate_suffix,
             base_dir,
+            false,
         )
     }
 
@@ -205,6 +208,7 @@ impl Rdsd2Pcm {
         filt_type: FilterType,
         append_rate_suffix: bool,
         base_dir: PathBuf,
+        use_sink: bool,
     ) -> Result<Self, Box<dyn Error>> {
         let (decim_ratio, upsample_ratio) =
             compute_decim_and_upsample(dsd_reader.dsd_rate(), out_rate);
@@ -214,17 +218,26 @@ impl Rdsd2Pcm {
             upsample_ratio,
         );
 
-        let pcm_writer = PcmWriter::new(
-            bit_depth,
-            out_type,
-            level_db,
-            out_rate,
-            out_path.clone(),
-            Dither::new(dither_type)?,
-            out_frames_capacity,
-            dsd_reader.channels_num(),
-            upsample_ratio,
-        )?;
+        let pcm_writer = if use_sink {
+            PcmWriter::new_sink(
+                out_rate,
+                out_frames_capacity,
+                dsd_reader.channels_num(),
+                upsample_ratio,
+            )?
+        } else {
+            PcmWriter::new(
+                bit_depth,
+                out_type,
+                level_db,
+                out_rate,
+                out_path.clone(),
+                Dither::new(dither_type)?,
+                out_frames_capacity,
+                dsd_reader.channels_num(),
+                upsample_ratio,
+            )?
+        };
 
         let conv_ctx = ConversionContext::new(
             dsd_reader,

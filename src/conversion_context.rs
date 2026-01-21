@@ -191,6 +191,10 @@ impl ConversionContext {
         }
     }
 
+    /// Only check peak level without writing output file
+    /// * `cancel_flag` - atomic flag to signal cancellation
+    /// * `sender` - optional progress update sender
+    /// returns peak level in dBFS
     pub fn check_level(
         &mut self,
         cancel_flag: &AtomicBool,
@@ -209,6 +213,7 @@ impl ConversionContext {
     ) -> Result<f32, Box<dyn Error>> {
         let channels_num = self.dsd_reader.channels_num();
         let reader = self.dsd_reader.dsd_iter()?;
+        let scale_factor = self.pcm_writer.scale_factor();
 
         // Convert internal float buffer units to normalized PCM units (±1.0 full scale).
         let mut peak_abs: f64 = 0.0;
@@ -228,7 +233,7 @@ impl ConversionContext {
                 // Note: `process_channel` writes into `pcm_writer.float_data`.
                 let float_data = self.pcm_writer.float_data_mut();
                 for &s in &float_data[..samples_used_per_chan] {
-                    let a = s.abs();
+                    let a = s.abs() * scale_factor;
                     if a > peak_abs {
                         peak_abs = a;
                     }

@@ -20,7 +20,7 @@ use flac_codec::metadata::{self, Picture, PictureType, VorbisComment};
 use id3::TagLike;
 
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
-use crate::{Dither, OutputType};
+use crate::{Dither, DitherType, OutputType};
 use log::{debug, info};
 use std::error::Error;
 use std::io::Write;
@@ -72,6 +72,45 @@ impl PcmWriter {
     }
     pub fn float_data_mut(&mut self) -> &mut Vec<f64> {
         &mut self.float_data
+    }
+
+    /// Create a PCM sink. Useful for level checks or whenever no file output is needed.
+    /// 32 bit float PCM is assumed internally.
+    /// * `out_rate` - output sample rate in Hz
+    /// * `out_frames_capacity` - number of frames to allocate buffer for
+    /// * `channels_num` - number of channels
+    /// * `upsample_ratio` - upsample ratio (1 when not fractional)
+    pub fn new_sink(
+        out_rate: u32,
+        out_frames_capacity: usize,
+        channels_num: usize,
+        upsample_ratio: u32,
+    ) -> Result<Self, Box<dyn Error>> {
+        Ok(Self {
+            bits: 32,
+            output: OutputType::Stdout,
+            bytes_per_sample: 4,
+            channels_num: channels_num,
+            rate: out_rate,
+            peak_level: 0,
+            scale_factor: upsample_ratio as f64,
+            float_file: None,
+            int_file: None,
+            stdout_buf: vec![
+                0u8;
+                out_frames_capacity
+                    * channels_num
+                    * 4
+            ],
+            vorbis: None,
+            pictures: Vec::new(),
+            path: None,
+            last_samps_clipped_low: 0,
+            last_samps_clipped_high: 0,
+            clips: 0,
+            dither: Dither::new(DitherType::None)?,
+            float_data: vec![0.0; out_frames_capacity],
+        })
     }
 
     pub fn new(
