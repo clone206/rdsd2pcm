@@ -46,11 +46,7 @@ or implied, of Sebastian Gesemann.
 use crate::{
     FilterType,
     filters::{
-        HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB,
-        HTAPS_DDR_16TO1_EQ, HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ,
-        HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ, HTAPS_DSD64_8TO1_EQ,
-        HTAPS_DSD64_16TO1_EQ, HTAPS_DSD64_32TO1_EQ, HTAPS_DSD256_32TO1_EQ,
-        HTAPS_DSD256_64TO1_EQ, HTAPS_DSD256_128TO1_EQ, HTAPS_XLD,
+        HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_8TO1_EQ, HTAPS_DDR_16TO1_CHEB, HTAPS_DDR_16TO1_EQ, HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ, HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ, HTAPS_DSD64_8TO1_EQ, HTAPS_DSD64_16TO1_EQ, HTAPS_DSD64_32TO1_EQ, HTAPS_DSD256_32TO1_EQ, HTAPS_DSD256_64TO1_EQ, HTAPS_DSD256_128TO1_EQ, HTAPS_XLD
     },
 };
 
@@ -182,13 +178,18 @@ pub fn select_precalc_taps(
                 None
             }
         }
-        // 8:1 (DSD64 only) – 'D' uses HTAPS_D2P, 'X' uses HTAPS_XLD, 'E' uses new equiripple, others fallback
+        // 8:1 (DSD64/128 only) – 'D' uses HTAPS_D2P, 'X' uses HTAPS_XLD, 'E' uses new equiripple, others fallback
         8 => {
             if dsd_rate == 1 {
                 match filt_type {
                     FilterType::Dsd2Pcm => Some(&HTAPS_D2P),
                     FilterType::XLD => Some(&HTAPS_XLD),
                     FilterType::Equiripple => Some(&HTAPS_DSD64_8TO1_EQ),
+                    _ => None,
+                }
+            } else if dsd_rate == 2 {
+                match filt_type {
+                    FilterType::Equiripple => Some(&HTAPS_DDR_8TO1_EQ),
                     _ => None,
                 }
             } else {
