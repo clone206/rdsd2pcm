@@ -46,7 +46,7 @@ or implied, of Sebastian Gesemann.
 use crate::{
     FilterType,
     filters::{
-        HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_8TO1_EQ, HTAPS_DDR_16TO1_CHEB, HTAPS_DDR_16TO1_EQ, HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ, HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ, HTAPS_DSD64_8TO1_EQ, HTAPS_DSD64_16TO1_EQ, HTAPS_DSD64_32TO1_EQ, HTAPS_DSD256_32TO1_EQ, HTAPS_DSD256_64TO1_EQ, HTAPS_DSD256_128TO1_EQ, HTAPS_XLD
+        HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_8TO1_EQ, HTAPS_DDR_16TO1_CHEB, HTAPS_DDR_16TO1_EQ, HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ, HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ, HTAPS_DSD64_8TO1_EQ, HTAPS_DSD64_16TO1_EQ, HTAPS_DSD64_32TO1_EQ, HTAPS_DSD256_8TO1_EQ, HTAPS_DSD256_16TO1_EQ, HTAPS_DSD256_32TO1_EQ, HTAPS_DSD256_64TO1_EQ, HTAPS_DSD256_128TO1_EQ, HTAPS_XLD
     },
 };
 
@@ -192,6 +192,11 @@ pub fn select_precalc_taps(
                     FilterType::Equiripple => Some(&HTAPS_DDR_8TO1_EQ),
                     _ => None,
                 }
+            } else if dsd_rate == 4 {
+                match filt_type {
+                    FilterType::Equiripple => Some(&HTAPS_DSD256_8TO1_EQ),
+                    _ => None,
+                }
             } else {
                 None
             }
@@ -205,6 +210,9 @@ pub fn select_precalc_taps(
                     Some(&HTAPS_DSD64_16TO1_EQ)
                 } else if dsd_rate == 2 {
                     Some(&HTAPS_DDR_16TO1_EQ)
+                } else if dsd_rate == 4 {
+                    // New dedicated DSD256 16:1 equiripple half taps
+                    Some(&HTAPS_DSD256_16TO1_EQ)
                 } else {
                     None
                 }
