@@ -304,7 +304,7 @@ where
             * bytes_per_sample) as u32;
 
         // COMM compression type and Pascal string name.
-        // All integer formats use big-endian byte order (matching Apple's afconvert).
+        // All integer formats use big-endian byte order
         let (comp_type, comp_name_bytes): ([u8; 4], Vec<u8>) = if is_float {
             let s = b"Linear PCM, 32 bit big-endian floating point" as &[u8];
             let mut v = vec![s.len() as u8];
@@ -320,7 +320,9 @@ where
             let s = b"Linear PCM, 24 bit big-endian signed integer" as &[u8];
             let mut v = vec![s.len() as u8];
             v.extend_from_slice(s);
-            (*b"in24", v)
+            // TODO: Apple afconvert and other software use "in24", but sox
+            // does not understand; using "NONE" for sox compatibility
+            (*b"NONE", v)
         };
         // channels(2) + frames(4) + bitDepth(2) + rate(10) + comp_type(4) + comp_name
         let comm_size: u32 = 22 + comp_name_bytes.len() as u32;
