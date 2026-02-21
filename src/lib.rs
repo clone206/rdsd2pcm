@@ -332,6 +332,7 @@ pub enum OutputType {
     Stdout,
     Wav,
     Aiff,
+    Aifc,
     Flac,
 }
 
@@ -340,6 +341,7 @@ impl From<&str> for OutputType {
         match s.to_lowercase().as_str() {
             "wav" => OutputType::Wav,
             "aif" => OutputType::Aiff,
+            "aifc" => OutputType::Aifc,
             "flac" => OutputType::Flac,
             _ => OutputType::Stdout,
         }
