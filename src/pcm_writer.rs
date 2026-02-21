@@ -206,9 +206,10 @@ impl PcmWriter {
         if out_bits == 32
             && out_type != OutputType::Stdout
             && out_type != OutputType::Wav
+            && out_type != OutputType::Aifc
         {
             return Err(
-                "32 bit float only allowed with wav or stdout".into()
+                "32 bit float only allowed with wav, aifc, or stdout".into()
             );
         }
 
@@ -303,6 +304,9 @@ impl PcmWriter {
             }
             OutputType::Aiff => {
                 self.save_and_print_file(out_path, AudioFileFormat::Aiff)?;
+            }
+            OutputType::Aifc => {
+                self.save_and_print_file(out_path, AudioFileFormat::Aifc)?;
             }
             OutputType::Flac => {
                 self.save_and_print_file(out_path, AudioFileFormat::Flac)?;

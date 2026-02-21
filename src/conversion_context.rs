@@ -401,6 +401,7 @@ impl ConversionContext {
         let ext = match self.pcm_writer.output() {
             OutputType::Wav => "wav",
             OutputType::Aiff => "aif",
+            OutputType::Aifc => "aifc",
             OutputType::Flac => "flac",
             _ => "out",
         };

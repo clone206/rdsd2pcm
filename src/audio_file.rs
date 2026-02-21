@@ -40,6 +40,7 @@ use flac_codec::metadata::{Picture, VorbisComment};
 pub enum AudioFileFormat {
     Wave,
     Aiff,
+    Aifc,
     Flac,
 }
 
@@ -82,6 +83,7 @@ where
         match format {
             AudioFileFormat::Wave => self.save_wave_file(path),
             AudioFileFormat::Aiff => self.save_aiff_file(path),
+            AudioFileFormat::Aifc => self.save_aifc_file(path),
             AudioFileFormat::Flac => {
                 self.save_flac_file(path, vorbis, pictures)
             }
@@ -277,6 +279,169 @@ where
                     io::ErrorKind::InvalidInput,
                     "Unsupported bit depth",
                 ));
+            }
+        }
+
+        w.flush()?;
+        Ok(())
+    }
+
+    fn save_aifc_file<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
+        let file = File::create(path)?;
+        let mut w = BufWriter::with_capacity(1 << 20, file);
+
+        let channels = self.num_channels;
+        let is_float = T::is_float();
+        let bytes_per_sample = if self.bit_depth == 20 {
+            3
+        } else {
+            self.bit_depth / 8
+        };
+        let block_align = channels * bytes_per_sample;
+        let frames = self.get_num_samples_per_channel();
+        let data_size = (frames
+            * self.num_channels
+            * bytes_per_sample) as u32;
+
+        // COMM compression type and Pascal string name.
+        // All integer formats use big-endian byte order (matching Apple's afconvert).
+        let (comp_type, comp_name_bytes): ([u8; 4], Vec<u8>) = if is_float {
+            let s = b"Linear PCM, 32 bit big-endian floating point" as &[u8];
+            let mut v = vec![s.len() as u8];
+            v.extend_from_slice(s);
+            (*b"fl32", v)
+        } else if self.bit_depth == 16 {
+            let s = b"Linear PCM, 16 bit big-endian signed integer" as &[u8];
+            let mut v = vec![s.len() as u8];
+            v.extend_from_slice(s);
+            (*b"twos", v)
+        } else {
+            // 24-bit (and 20-bit packed into 24)
+            let s = b"Linear PCM, 24 bit big-endian signed integer" as &[u8];
+            let mut v = vec![s.len() as u8];
+            v.extend_from_slice(s);
+            (*b"in24", v)
+        };
+        // channels(2) + frames(4) + bitDepth(2) + rate(10) + comp_type(4) + comp_name
+        let comm_size: u32 = 22 + comp_name_bytes.len() as u32;
+        let comm_size_padded = (comm_size + 1) & !1;
+
+        // FLLR: pad so SSND audio data starts on a 4096-byte boundary.
+        // before_fllr = FORM(8) + AIFC(4) + FVER(12) + COMM(8+comm_size_padded)
+        //             = 32 + comm_size_padded
+        let fllr_data_size: u32 = {
+            const PAGE: u32 = 4096;
+            let before_fllr = 32 + comm_size_padded;
+            // +24: FLLR header(8) + SSND header(8) + SSND offset+block(8)
+            let r = (before_fllr + 24) % PAGE;
+            if r == 0 { 0 } else { PAGE - r }
+        };
+        let fllr_chunk_size: u32 =
+            if fllr_data_size > 0 { 8 + fllr_data_size } else { 0 };
+
+        // FORM body = AIFC(4) + FVER(12) + COMM(8+comm_size_padded)
+        //           + FLLR + SSND(8 + data_size+8)
+        let form_size =
+            40 + comm_size_padded + fllr_chunk_size + data_size;
+
+        w.write_all(b"FORM")?;
+        w.write_all(&form_size.to_be_bytes())?;
+        w.write_all(b"AIFC")?;
+
+        // FVER (mandatory for AIFC, version timestamp 0xA2805140)
+        w.write_all(b"FVER")?;
+        w.write_all(&4u32.to_be_bytes())?;
+        w.write_all(&0xA2805140u32.to_be_bytes())?;
+
+        // COMM
+        w.write_all(b"COMM")?;
+        w.write_all(&comm_size_padded.to_be_bytes())?;
+        w.write_all(&(channels as u16).to_be_bytes())?;
+        w.write_all(&(frames as u32).to_be_bytes())?;
+        w.write_all(&(self.bit_depth as u16).to_be_bytes())?;
+        let mut extended = [0u8; 10];
+        self.encode_extended(self.sample_rate as f64, &mut extended);
+        w.write_all(&extended)?;
+        w.write_all(&comp_type)?;
+        w.write_all(&comp_name_bytes)?;
+        if comm_size % 2 != 0 {
+            w.write_all(&[0u8])?;
+        }
+
+        // FLLR
+        if fllr_data_size > 0 {
+            w.write_all(b"FLLR")?;
+            w.write_all(&fllr_data_size.to_be_bytes())?;
+            w.write_all(&vec![0u8; fllr_data_size as usize])?;
+        }
+
+        // SSND
+        w.write_all(b"SSND")?;
+        w.write_all(&(data_size + 8).to_be_bytes())?;
+        w.write_all(&0u32.to_be_bytes())?; // offset
+        w.write_all(&0u32.to_be_bytes())?; // block size
+
+        const FRAME_BLOCK: usize = 16_384;
+        let mut buf: Vec<u8> =
+            Vec::with_capacity(FRAME_BLOCK * block_align);
+
+        if is_float {
+            for base in (0..frames).step_by(FRAME_BLOCK) {
+                buf.clear();
+                let end = (base + FRAME_BLOCK).min(frames);
+                for i in base..end {
+                    for ch in 0..self.num_channels {
+                        buf.extend_from_slice(
+                            &self.samples[ch][i].to_f32().to_be_bytes(),
+                        );
+                    }
+                }
+                w.write_all(&buf)?;
+            }
+        } else {
+            match self.bit_depth {
+                16 => {
+                    for base in (0..frames).step_by(FRAME_BLOCK) {
+                        buf.clear();
+                        let end = (base + FRAME_BLOCK).min(frames);
+                        for i in base..end {
+                            for ch in 0..self.num_channels {
+                                buf.extend_from_slice(
+                                    &self.samples[ch][i]
+                                        .to_i16()
+                                        .to_be_bytes(),
+                                );
+                            }
+                        }
+                        w.write_all(&buf)?;
+                    }
+                }
+                24 | 20 => {
+                    for base in (0..frames).step_by(FRAME_BLOCK) {
+                        buf.clear();
+                        let end = (base + FRAME_BLOCK).min(frames);
+                        for i in base..end {
+                            for ch in 0..self.num_channels {
+                                let mut v = self.samples[ch][i].to_i24();
+                                if self.bit_depth == 20 {
+                                    v <<= 4;
+                                }
+                                buf.extend_from_slice(&[
+                                    ((v >> 16) & 0xFF) as u8,
+                                    ((v >> 8) & 0xFF) as u8,
+                                    (v & 0xFF) as u8,
+                                ]);
+                            }
+                        }
+                        w.write_all(&buf)?;
+                    }
+                }
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "Unsupported bit depth",
+                    ));
+                }
             }
         }
 
