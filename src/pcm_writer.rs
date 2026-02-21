@@ -27,6 +27,74 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::{io, vec};
 
+/// Direct ID3 text-frame -> Vorbis comment field mappings (one-to-one).
+/// Frames with special parsing (TRCK, TPOS, TDRC, COMM, USLT, TIPL, TMCL,
+/// UFID, W-frames, TXXX) are handled separately in `id3_to_flac_meta`.
+const ID3_VORBIS_MAP: &[(&str, &str)] = &[
+    ("TPE1", "ARTIST"),
+    ("TPE2", "ALBUMARTIST"),
+    ("TSO2", "ALBUMARTISTSORT"),
+    ("TSOA", "ALBUMSORT"),
+    ("TSOP", "ARTISTSORT"),
+    ("TALB", "ALBUM"),
+    ("TIT2", "TITLE"),
+    ("TBPM", "BPM"),
+    ("TCOM", "COMPOSER"),
+    ("TSOC", "COMPOSERSORT"),
+    ("TPE3", "CONDUCTOR"),
+    ("TCOP", "COPYRIGHT"),
+    ("TCON", "GENRE"),
+    ("TIT1", "GROUPING"),
+    ("TKEY", "KEY"),
+    ("TSRC", "ISRC"),
+    ("TPUB", "LABEL"),
+    ("TLAN", "LANGUAGE"),
+    ("TEXT", "LYRICIST"),
+    ("TMED", "MEDIA"),
+    ("TMOO", "MOOD"),
+    ("MVNM", "MOVEMENTNAME"),
+    ("TOFN", "ORIGINALFILENAME"),
+    ("TDRL", "RELEASEDATE"),
+    ("TPE4", "REMIXER"),
+    ("TIT3", "SUBTITLE"),
+    ("TSOT", "TITLESORT"),
+    ("TENC", "ENCODEDBY"),
+    ("TSSE", "ENCODERSETTINGS"),
+    ("TCMP", "COMPILATION"),
+    ("TSST", "DISCSUBTITLE"),
+];
+
+/// TXXX description -> Vorbis field name, for entries where they differ.
+/// Descriptions not listed here are copied as-is (e.g. REPLAYGAIN_*, ASIN).
+const ID3_TXXX_VORBIS_MAP: &[(&str, &str)] = &[
+    ("MusicBrainz Artist Id",          "MUSICBRAINZ_ARTISTID"),
+    ("MusicBrainz Album Id",           "MUSICBRAINZ_ALBUMID"),
+    ("MusicBrainz Album Artist Id",    "MUSICBRAINZ_ALBUMARTISTID"),
+    ("MusicBrainz Release Group Id",   "MUSICBRAINZ_RELEASEGROUPID"),
+    ("MusicBrainz Release Track Id",   "MUSICBRAINZ_RELEASETRACKID"),
+    ("MusicBrainz TRM Id",             "MUSICBRAINZ_TRMID"),
+    ("MusicBrainz Work Id",            "MUSICBRAINZ_WORKID"),
+    ("MusicBrainz Disc Id",            "MUSICBRAINZ_DISCID"),
+    ("MusicBrainz Original Artist Id", "MUSICBRAINZ_ORIGINALARTISTID"),
+    ("MusicBrainz Original Album Id",  "MUSICBRAINZ_ORIGINALALBUMID"),
+    ("MusicBrainz Album Release Country", "RELEASECOUNTRY"),
+    ("MusicBrainz Album Status",       "RELEASESTATUS"),
+    ("MusicBrainz Album Type",         "RELEASETYPE"),
+    ("Acoustid Id",                    "ACOUSTID_ID"),
+    ("Acoustid Fingerprint",           "ACOUSTID_FINGERPRINT"),
+    ("MusicIP PUID",                   "MUSICIP_PUID"),
+    ("Writer",                         "WRITER"),
+];
+
+/// TIPL/IPLS role string -> Vorbis field name.
+const ID3_TIPL_VORBIS_MAP: &[(&str, &str)] = &[
+    ("arranger", "ARRANGER"),
+    ("engineer", "ENGINEER"),
+    ("dj-mix", "DJMIXER"),
+    ("mix", "MIXER"),
+    ("producer", "PRODUCER"),
+];
+
 pub struct PcmWriter {
     float_data: Vec<f64>,
     scale_factor: f64,
@@ -348,7 +416,8 @@ impl PcmWriter {
         }
     }
 
-    /// Convert ID3 tag to FLAC VorbisComment metadata
+    /// Convert ID3 tag to FLAC VorbisComment metadata, following the
+    /// same field mapping used by MusicBrainz Picard.
     pub fn id3_to_flac_meta(&mut self, tag: &id3::Tag) {
         let unix_datetime = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -363,27 +432,145 @@ impl PcmWriter {
             fields: Vec::new(),
         };
 
-        if let Some(artist) = tag.artist() {
-            vorbis.insert("ARTIST", artist);
+        // One-to-one text frame mappings via ID3_VORBIS_MAP
+        for &(id3_id, vorbis_name) in ID3_VORBIS_MAP {
+            if let Some(v) =
+                tag.get(id3_id).and_then(|f| f.content().text())
+            {
+                for val in v.split('\0').filter(|s| !s.is_empty()) {
+                    vorbis.insert(vorbis_name, val);
+                }
+            }
         }
-        if let Some(album) = tag.album() {
-            vorbis.insert("ALBUM", album);
+
+        // TRCK -> TRACKNUMBER + TOTALTRACKS/TRACKTOTAL (parsed from "n/total")
+        if let Some(n) = tag.track() {
+            vorbis.insert("TRACKNUMBER", &n.to_string());
         }
-        if let Some(title) = tag.title() {
-            vorbis.insert("TITLE", title);
+        if let Some(n) = tag.total_tracks() {
+            let s = n.to_string();
+            vorbis.insert("TOTALTRACKS", &s);
+            vorbis.insert("TRACKTOTAL", &s);
         }
-        if let Some(track) = tag.track() {
-            vorbis.insert("TRACKNUMBER", &track.to_string());
+
+        // TPOS -> DISCNUMBER + TOTALDISCS/DISCTOTAL (parsed from "n/total")
+        if let Some(n) = tag.disc() {
+            vorbis.insert("DISCNUMBER", &n.to_string());
         }
-        if let Some(disc) = tag.disc() {
-            vorbis.insert("DISCNUMBER", &disc.to_string());
+        if let Some(n) = tag.total_discs() {
+            let s = n.to_string();
+            vorbis.insert("TOTALDISCS", &s);
+            vorbis.insert("DISCTOTAL", &s);
         }
-        if let Some(year) = tag.year() {
+
+        // TDRC -> DATE (full ISO timestamp); fall back to TYER year
+        if let Some(date) = tag.date_recorded() {
+            vorbis.insert("DATE", &date.to_string());
+        } else if let Some(year) = tag.year() {
             vorbis.insert("DATE", &year.to_string());
         }
-        if let Some(comment_frame) = tag.get("COMM") {
-            if let id3::Content::Comment(comm) = comment_frame.content() {
+
+        // TDOR -> ORIGINALDATE; fall back to TORY (ID3v2.3 equivalent)
+        if let Some(v) = tag
+            .get("TDOR")
+            .or_else(|| tag.get("TORY"))
+            .and_then(|f| f.content().text())
+        {
+            vorbis.insert("ORIGINALDATE", v);
+        }
+
+        // MVIN -> MOVEMENTTOTAL + MOVEMENT (two Vorbis fields, one frame)
+        if let Some(v) =
+            tag.get("MVIN").and_then(|f| f.content().text())
+        {
+            vorbis.insert("MOVEMENTTOTAL", v);
+            vorbis.insert("MOVEMENT", v);
+        }
+
+        // COMM -> COMMENT
+        if let Some(f) = tag.get("COMM") {
+            if let id3::Content::Comment(comm) = f.content() {
                 vorbis.insert("COMMENT", &comm.text);
+            }
+        }
+
+        // USLT -> LYRICS
+        if let Some(f) = tag.get("USLT") {
+            if let id3::Content::Lyrics(lyrics) = f.content() {
+                vorbis.insert("LYRICS", &lyrics.text);
+            }
+        }
+
+        // TIPL/IPLS -> role-based fields via ID3_TIPL_VORBIS_MAP
+        for frame in tag
+            .frames()
+            .filter(|f| f.id() == "TIPL" || f.id() == "IPLS")
+        {
+            if let id3::Content::InvolvedPeopleList(ip) = frame.content() {
+                for item in &ip.items {
+                    for &(r, vorbis_name) in ID3_TIPL_VORBIS_MAP {
+                        if item.involvement.eq_ignore_ascii_case(r) {
+                            vorbis.insert(vorbis_name, &item.involvee);
+                        }
+                    }
+                }
+            }
+        }
+
+        // TMCL -> PERFORMER "artist (instrument)"
+        for frame in tag.frames().filter(|f| f.id() == "TMCL") {
+            if let id3::Content::InvolvedPeopleList(mc) = frame.content() {
+                for item in &mc.items {
+                    vorbis.insert(
+                        "PERFORMER",
+                        &format!("{} ({})", item.involvee, item.involvement),
+                    );
+                }
+            }
+        }
+
+        // UFID:http://musicbrainz.org -> MUSICBRAINZ_TRACKID
+        for frame in tag.frames().filter(|f| f.id() == "UFID") {
+            if let id3::Content::UniqueFileIdentifier(ufid) =
+                frame.content()
+            {
+                if ufid.owner_identifier == "http://musicbrainz.org" {
+                    if let Ok(mbid) =
+                        std::str::from_utf8(&ufid.identifier)
+                    {
+                        vorbis.insert("MUSICBRAINZ_TRACKID", mbid);
+                    }
+                }
+            }
+        }
+
+        // WCOP -> LICENSE, WOAR -> WEBSITE (web URL frames)
+        for (frame_id, vorbis_name) in
+            [("WCOP", "LICENSE"), ("WOAR", "WEBSITE")]
+        {
+            if let Some(f) = tag.get(frame_id) {
+                if let id3::Content::Link(url) = f.content() {
+                    vorbis.insert(vorbis_name, url);
+                }
+            }
+        }
+
+        // TXXX -> use ID3_TXXX_VORBIS_MAP for known descriptions that need
+        // renaming; fall back to the description as-is for everything else
+        // (ReplayGain, ASIN, BARCODE, CATALOGNUMBER, etc.).
+        for et in tag.extended_texts() {
+            if et.description.is_empty() {
+                continue;
+            }
+            let vorbis_name = ID3_TXXX_VORBIS_MAP
+                .iter()
+                .find(|(desc, _)| {
+                    desc.eq_ignore_ascii_case(&et.description)
+                })
+                .map(|&(_, name)| name)
+                .unwrap_or(&et.description);
+            for val in et.value.split('\0').filter(|s| !s.is_empty()) {
+                vorbis.insert(vorbis_name, val);
             }
         }
 
