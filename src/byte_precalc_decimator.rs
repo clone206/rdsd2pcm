@@ -43,6 +43,8 @@ or implied, of Sebastian Gesemann.
 // - Produces one output per 'decim' input bits (decim/8 bytes).
 // ============================================================================
 
+use log::trace;
+
 use crate::{
     FilterType,
     filters::{
@@ -57,7 +59,6 @@ pub struct BytePrecalcDecimator {
     bytes_per_out: u32,
     fifo: Vec<u8>,
     fifo_pos: usize,
-    delay_count: u64, // Countdown before starting to emit
     // Cached for mirror addressing
     table_span: usize, // num_tables * 2 - 1
 }
@@ -75,7 +76,7 @@ impl BytePrecalcDecimator {
         // Number of 8-bit windows covering half the filter
         let num_tables = (half + 7) / 8;
 
-        Some(Self {
+        let dec = Self {
             tables: (0..num_tables)
                 // Reverse to align with C's tableIdx = numTables - 1 - t
                 .rev()
@@ -100,11 +101,13 @@ impl BytePrecalcDecimator {
                 .collect(),
             num_tables,
             bytes_per_out: decim / 8,
-            fifo: vec![0u8; (num_tables * 2 + 8).next_power_of_two()], // simple ring
+            fifo: vec![0x69u8; (num_tables * 2 + 8).next_power_of_two()], // simple ring
             fifo_pos: 0,
-            delay_count: ((half * 2 - 1) / 2) as u64,
             table_span: num_tables * 2 - 1,
-        })
+        };
+        trace!("BytePrecalcDecimator initialized with {} tables, {} bytes per output, fifo size {}",
+            dec.num_tables, dec.bytes_per_out, dec.fifo.len());
+        Some(dec)
     }
 
     /// Feed a block of DSD bytes; produce decimated PCM outputs.
@@ -130,10 +133,7 @@ impl BytePrecalcDecimator {
             if byte_count_in_frame == self.bytes_per_out {
                 byte_count_in_frame = 0;
 
-                // Handle startup latency (group delay)
-                if self.delay_count > 0 {
-                    self.delay_count -= 1;
-                } else if produced < out.len() {
+                if produced < out.len() {
                     out[produced] =
                         (0..self.num_tables).fold(0.0f64, |acc, i| {
                             // Recent window i

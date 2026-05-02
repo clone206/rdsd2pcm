@@ -283,6 +283,9 @@ impl ConversionContext {
 
         self.send_output_percent(101.0, &sender);
 
+        self.diag_expected_frames_floor = (self.chan_bits_read
+            * self.upsample_ratio as u64)
+            / self.decim_ratio as u64;
         let total_elapsed = wall_start.elapsed();
 
         self.report_timing(dsp_elapsed, total_elapsed);
@@ -335,9 +338,6 @@ impl ConversionContext {
         sender: &Option<mpsc::Sender<ProgressUpdate>>,
     ) -> usize {
         self.inc_bytes_read(read_size);
-        self.diag_expected_frames_floor = (self.chan_bits_read
-            * self.upsample_ratio as u64)
-            / self.decim_ratio as u64;
         self.diag_frames_out += samples_used_per_chan as u64;
 
         if let Some(sender) = sender {
