@@ -16,84 +16,17 @@
  along with rdsd2pcm. If not, see <https://www.gnu.org/licenses/>.
 */
 
-use flac_codec::metadata::{self, Picture, PictureType, VorbisComment};
-use id3::TagLike;
-
-use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
+use crate::audio_file::{
+    AifcStreamWriter, AiffStreamWriter, FlacStreamWriter,
+    StreamingWriter, WavStreamWriter,
+};
 use crate::{Dither, DitherType, OutputType};
-use log::{debug, info};
+use log::debug;
 use std::error::Error;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::{io, vec};
-
-/// Direct ID3 text-frame -> Vorbis comment field mappings (one-to-one).
-/// Frames with special parsing (TRCK, TPOS, TDRC, COMM, USLT, TIPL, TMCL,
-/// UFID, W-frames, TXXX) are handled separately in `id3_to_flac_meta`.
-const ID3_VORBIS_MAP: &[(&str, &str)] = &[
-    ("TPE1", "ARTIST"),
-    ("TPE2", "ALBUMARTIST"),
-    ("TSO2", "ALBUMARTISTSORT"),
-    ("TSOA", "ALBUMSORT"),
-    ("TSOP", "ARTISTSORT"),
-    ("TALB", "ALBUM"),
-    ("TIT2", "TITLE"),
-    ("TBPM", "BPM"),
-    ("TCOM", "COMPOSER"),
-    ("TSOC", "COMPOSERSORT"),
-    ("TPE3", "CONDUCTOR"),
-    ("TCOP", "COPYRIGHT"),
-    ("TCON", "GENRE"),
-    ("TIT1", "GROUPING"),
-    ("TKEY", "KEY"),
-    ("TSRC", "ISRC"),
-    ("TPUB", "LABEL"),
-    ("TLAN", "LANGUAGE"),
-    ("TEXT", "LYRICIST"),
-    ("TMED", "MEDIA"),
-    ("TMOO", "MOOD"),
-    ("MVNM", "MOVEMENTNAME"),
-    ("TOFN", "ORIGINALFILENAME"),
-    ("TDRL", "RELEASEDATE"),
-    ("TPE4", "REMIXER"),
-    ("TIT3", "SUBTITLE"),
-    ("TSOT", "TITLESORT"),
-    ("TENC", "ENCODEDBY"),
-    ("TSSE", "ENCODERSETTINGS"),
-    ("TCMP", "COMPILATION"),
-    ("TSST", "DISCSUBTITLE"),
-];
-
-/// TXXX description -> Vorbis field name, for entries where they differ.
-/// Descriptions not listed here are copied as-is (e.g. REPLAYGAIN_*, ASIN).
-const ID3_TXXX_VORBIS_MAP: &[(&str, &str)] = &[
-    ("MusicBrainz Artist Id",          "MUSICBRAINZ_ARTISTID"),
-    ("MusicBrainz Album Id",           "MUSICBRAINZ_ALBUMID"),
-    ("MusicBrainz Album Artist Id",    "MUSICBRAINZ_ALBUMARTISTID"),
-    ("MusicBrainz Release Group Id",   "MUSICBRAINZ_RELEASEGROUPID"),
-    ("MusicBrainz Release Track Id",   "MUSICBRAINZ_RELEASETRACKID"),
-    ("MusicBrainz TRM Id",             "MUSICBRAINZ_TRMID"),
-    ("MusicBrainz Work Id",            "MUSICBRAINZ_WORKID"),
-    ("MusicBrainz Disc Id",            "MUSICBRAINZ_DISCID"),
-    ("MusicBrainz Original Artist Id", "MUSICBRAINZ_ORIGINALARTISTID"),
-    ("MusicBrainz Original Album Id",  "MUSICBRAINZ_ORIGINALALBUMID"),
-    ("MusicBrainz Album Release Country", "RELEASECOUNTRY"),
-    ("MusicBrainz Album Status",       "RELEASESTATUS"),
-    ("MusicBrainz Album Type",         "RELEASETYPE"),
-    ("Acoustid Id",                    "ACOUSTID_ID"),
-    ("Acoustid Fingerprint",           "ACOUSTID_FINGERPRINT"),
-    ("MusicIP PUID",                   "MUSICIP_PUID"),
-    ("Writer",                         "WRITER"),
-];
-
-/// TIPL/IPLS role string -> Vorbis field name.
-const ID3_TIPL_VORBIS_MAP: &[(&str, &str)] = &[
-    ("arranger", "ARRANGER"),
-    ("engineer", "ENGINEER"),
-    ("dj-mix", "DJMIXER"),
-    ("mix", "MIXER"),
-    ("producer", "PRODUCER"),
-];
 
 pub struct PcmWriter {
     float_data: Vec<f64>,
@@ -109,11 +42,15 @@ pub struct PcmWriter {
     dither: Dither,
     last_samps_clipped_low: i32,
     last_samps_clipped_high: i32,
-    float_file: Option<AudioFile<f32>>,
-    int_file: Option<AudioFile<i32>>,
     stdout_buf: Vec<u8>,
-    vorbis: Option<VorbisComment>,
-    pictures: Vec<Picture>,
+    // True streaming support: when set, samples are encoded and written
+    // directly to disk one batch at a time (see `write_to_buffer`,
+    // `flush_stream`) instead of being accumulated in memory. This keeps
+    // peak memory bounded to a single batch regardless of track length.
+    // Every file output format (Flac, Aiff, Aifc, Wav) has a
+    // streaming implementation (see `audio_file`); this is `None`
+    // only for `Stdout`, which uses `stdout_buf` instead.
+    stream_writer: Option<Box<dyn StreamingWriter>>,
 }
 
 impl PcmWriter {
@@ -162,22 +99,19 @@ impl PcmWriter {
             rate: out_rate,
             peak_level: 0,
             scale_factor: upsample_ratio as f64,
-            float_file: None,
-            int_file: None,
             stdout_buf: vec![
                 0u8;
                 out_frames_capacity
                     * channels_num
                     * 4
             ],
-            vorbis: None,
-            pictures: Vec::new(),
             path: None,
             last_samps_clipped_low: 0,
             last_samps_clipped_high: 0,
             clips: 0,
             dither: Dither::new(DitherType::None)?,
             float_data: vec![0.0; out_frames_capacity],
+            stream_writer: None,
         })
     }
 
@@ -237,52 +171,117 @@ impl PcmWriter {
             rate: out_rate,
             peak_level: 0,
             scale_factor: 1.0,
-            float_file: None,
-            int_file: None,
             stdout_buf: vec![
                 0u8;
                 out_frames_capacity
                     * channels_num
                     * bytes_per_sample
             ],
-            vorbis: None,
-            pictures: Vec::new(),
             path: canon_path,
             last_samps_clipped_low: 0,
             last_samps_clipped_high: 0,
             clips: 0,
             dither,
             float_data: vec![0.0; out_frames_capacity],
+            stream_writer: None,
         };
         debug!("Dither type: {:#?}", ctx.dither.dither_type());
 
         ctx.set_scaling(out_vol, upsample_ratio);
 
-        if ctx.output != OutputType::Stdout {
-            ctx.init_file();
-        }
-
         Ok(ctx)
     }
 
-    fn init_file(&mut self) {
-        if self.bits == 32 {
-            let float_file =
-                AudioFile::new(self.channels_num, self.bits, self.rate);
-            self.float_file = Some(float_file);
-        } else {
-            let int_file =
-                AudioFile::new(self.channels_num, self.bits, self.rate);
-            self.int_file = Some(int_file);
+    /// Open this writer's streaming implementation at `out_path`, bypassing
+    /// the in-memory sample buffer entirely so peak memory stays bounded
+    /// to a single batch regardless of track length. For FLAC, must be
+    /// called after any tag/vorbis metadata has already been set via
+    /// `id3_to_flac_meta` (FLAC metadata blocks must precede all audio
+    /// frames). Must be called before any samples are written via
+    /// `write_to_buffer`. No-op for `Stdout`, the only output type without
+    /// a streaming implementation (see `audio_file`).
+    pub fn open_stream(
+        &mut self,
+        out_path: &Path,
+        tag: Option<id3::Tag>,
+    ) -> Result<(), Box<dyn Error>> {
+        let writer: Box<dyn StreamingWriter> = match self.output {
+            OutputType::Flac => Box::new(FlacStreamWriter::open(
+                out_path,
+                self.rate,
+                self.bits,
+                self.channels_num,
+                tag,
+            )?),
+            OutputType::Aiff => Box::new(AiffStreamWriter::open(
+                out_path,
+                self.rate,
+                self.bits,
+                self.channels_num,
+                tag,
+            )?),
+            OutputType::Aifc => Box::new(AifcStreamWriter::open(
+                out_path,
+                self.rate,
+                self.bits,
+                self.channels_num,
+                tag,
+            )?),
+            OutputType::Wav => Box::new(WavStreamWriter::open(
+                out_path,
+                self.rate,
+                self.bits,
+                self.channels_num,
+                tag,
+            )?),
+            OutputType::Stdout => return Ok(()),
+        };
+        self.stream_writer = Some(writer);
+        Ok(())
+    }
+
+    /// Interleave and write out the current batch's accumulated samples
+    /// (across all channels) once enough frames have accumulated, then
+    /// clear the writer's per-channel scratch buffers for reuse. Batching
+    /// many DSD blocks' worth of samples before handing them to the
+    /// encoder means far fewer, larger writes instead of one tiny write
+    /// per DSD block. No-op unless a streaming writer is open (see
+    /// `open_stream`) or not enough frames have accumulated yet.
+    pub fn flush_stream(&mut self) -> Result<(), Box<dyn Error>> {
+        if let Some(w) = self.stream_writer.as_mut() {
+            w.flush_ready()?;
         }
+        Ok(())
     }
 
-    fn add_picture(&mut self, pic: Picture) {
-        self.pictures.push(pic);
+    /// Finalize and close the streaming writer opened via `open_stream`,
+    /// flushing any samples still sitting in the scratch buffer (which may
+    /// be smaller than the writer's flush threshold, since this is the
+    /// final, possibly-partial batch) and patching any header fields that
+    /// depend on the final frame count. No-op if no streaming writer is
+    /// open.
+    pub fn finalize_stream(&mut self) -> Result<(), Box<dyn Error>> {
+        if let Some(w) = self.stream_writer.take() {
+            w.finalize()?;
+        }
+        Ok(())
     }
 
-    fn set_vorbis(&mut self, vorbis: VorbisComment) {
-        self.vorbis = Some(vorbis);
+    /// Whether a streaming writer is currently open (see `open_stream`).
+    /// Used by callers to decide whether a partial output file needs to be
+    /// cleaned up after a failed/cancelled conversion.
+    pub fn has_open_stream(&self) -> bool {
+        self.stream_writer.is_some()
+    }
+
+    /// Abandon any open streaming writer without flushing pending scratch
+    /// samples, for use when a conversion is aborted (error or user
+    /// cancellation) and the partial output file is about to be deleted
+    /// anyway. Dropping the writer still triggers its internal `Drop` impl,
+    /// but since the file is discarded immediately afterward any such cost
+    /// is harmless.
+    pub fn abort_stream(&mut self) {
+        self.stream_writer = None;
     }
 
     pub fn set_scaling(&mut self, volume: f64, upsample_ratio: u32) {
@@ -295,71 +294,6 @@ impl PcmWriter {
         self.peak_level = self.scale_factor.floor() as i32;
         self.scale_factor *= vol_scale;
         self.scale_factor *= upsample_ratio as f64
-    }
-
-    pub fn save_file(&self, out_path: &PathBuf) -> Result<(), String> {
-        match self.output {
-            OutputType::Wav => {
-                self.save_and_print_file(out_path, AudioFileFormat::Wave)?;
-            }
-            OutputType::Aiff => {
-                self.save_and_print_file(out_path, AudioFileFormat::Aiff)?;
-            }
-            OutputType::Aifc => {
-                self.save_and_print_file(out_path, AudioFileFormat::Aifc)?;
-            }
-            OutputType::Flac => {
-                self.save_and_print_file(out_path, AudioFileFormat::Flac)?;
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    /// Save audio file, forcibly overwriting any existing file at the target path
-    pub fn save_and_print_file(
-        &self,
-        out_path: &PathBuf,
-        fmt: AudioFileFormat,
-    ) -> Result<(), String> {
-        let path = out_path.as_path();
-        if path.exists() {
-            // Best effort remove; propagate error if it fails (e.g. permission issues)
-            std::fs::remove_file(path).map_err(|e| {
-                format!(
-                    "Failed to remove existing file '{}': {}",
-                    out_path.to_string_lossy(),
-                    e
-                )
-            })?;
-        }
-
-        match (self.bits == 32, &self.float_file, &self.int_file) {
-            (true, Some(file), _) => {
-                file.save(
-                    out_path,
-                    fmt,
-                    self.vorbis.clone(),
-                    self.pictures.clone(),
-                )
-                .map_err(|e| e.to_string())?;
-                file.print_summary();
-            }
-            (false, _, Some(file)) => {
-                file.save(
-                    out_path,
-                    fmt,
-                    self.vorbis.clone(),
-                    self.pictures.clone(),
-                )
-                .map_err(|e| e.to_string())?;
-                file.print_summary();
-            }
-            _ => return Err("No file initialized".to_string()),
-        }
-
-        info!("Wrote to file: {}", out_path.to_string_lossy());
-        Ok(())
     }
 
     pub fn pack_float(&mut self, offset: &mut usize, sample: f64) {
@@ -408,202 +342,6 @@ impl PcmWriter {
         Ok(())
     }
 
-    pub fn push_samp<T: AudioSample>(&mut self, samp: T, channel: usize) {
-        if self.bits == 32 {
-            if let Some(file) = &mut self.float_file {
-                file.samples_mut()[channel].push(samp.to_f32());
-            }
-        } else {
-            if let Some(file) = &mut self.int_file {
-                file.samples_mut()[channel].push(samp.to_i32());
-            }
-        }
-    }
-
-    /// Convert ID3 tag to FLAC VorbisComment metadata, following the
-    /// same field mapping used by MusicBrainz Picard.
-    pub fn id3_to_flac_meta(&mut self, tag: &id3::Tag) {
-        let unix_datetime = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or_default();
-        let mut vorbis = metadata::VorbisComment {
-            vendor_string: format!(
-                "dsd2dxd v{} Unix datetime {}",
-                env!("CARGO_PKG_VERSION"),
-                unix_datetime
-            ),
-            fields: Vec::new(),
-        };
-
-        // One-to-one text frame mappings via ID3_VORBIS_MAP
-        for &(id3_id, vorbis_name) in ID3_VORBIS_MAP {
-            if let Some(v) =
-                tag.get(id3_id).and_then(|f| f.content().text())
-            {
-                for val in v.split('\0').filter(|s| !s.is_empty()) {
-                    vorbis.insert(vorbis_name, val);
-                }
-            }
-        }
-
-        // TRCK -> TRACKNUMBER + TOTALTRACKS/TRACKTOTAL (parsed from "n/total")
-        if let Some(n) = tag.track() {
-            vorbis.insert("TRACKNUMBER", &n.to_string());
-        }
-        if let Some(n) = tag.total_tracks() {
-            let s = n.to_string();
-            vorbis.insert("TOTALTRACKS", &s);
-            vorbis.insert("TRACKTOTAL", &s);
-        }
-
-        // TPOS -> DISCNUMBER + TOTALDISCS/DISCTOTAL (parsed from "n/total")
-        if let Some(n) = tag.disc() {
-            vorbis.insert("DISCNUMBER", &n.to_string());
-        }
-        if let Some(n) = tag.total_discs() {
-            let s = n.to_string();
-            vorbis.insert("TOTALDISCS", &s);
-            vorbis.insert("DISCTOTAL", &s);
-        }
-
-        // TDRC -> DATE (full ISO timestamp); fall back to TYER year
-        if let Some(date) = tag.date_recorded() {
-            vorbis.insert("DATE", &date.to_string());
-        } else if let Some(year) = tag.year() {
-            vorbis.insert("DATE", &year.to_string());
-        }
-
-        // TDOR -> ORIGINALDATE; fall back to TORY (ID3v2.3 equivalent)
-        if let Some(v) = tag
-            .get("TDOR")
-            .or_else(|| tag.get("TORY"))
-            .and_then(|f| f.content().text())
-        {
-            vorbis.insert("ORIGINALDATE", v);
-        }
-
-        // MVIN -> MOVEMENTTOTAL + MOVEMENT (two Vorbis fields, one frame)
-        if let Some(v) =
-            tag.get("MVIN").and_then(|f| f.content().text())
-        {
-            vorbis.insert("MOVEMENTTOTAL", v);
-            vorbis.insert("MOVEMENT", v);
-        }
-
-        // COMM -> COMMENT
-        if let Some(f) = tag.get("COMM") {
-            if let id3::Content::Comment(comm) = f.content() {
-                vorbis.insert("COMMENT", &comm.text);
-            }
-        }
-
-        // USLT -> LYRICS
-        if let Some(f) = tag.get("USLT") {
-            if let id3::Content::Lyrics(lyrics) = f.content() {
-                vorbis.insert("LYRICS", &lyrics.text);
-            }
-        }
-
-        // TIPL/IPLS -> role-based fields via ID3_TIPL_VORBIS_MAP
-        for frame in tag
-            .frames()
-            .filter(|f| f.id() == "TIPL" || f.id() == "IPLS")
-        {
-            if let id3::Content::InvolvedPeopleList(ip) = frame.content() {
-                for item in &ip.items {
-                    for &(r, vorbis_name) in ID3_TIPL_VORBIS_MAP {
-                        if item.involvement.eq_ignore_ascii_case(r) {
-                            vorbis.insert(vorbis_name, &item.involvee);
-                        }
-                    }
-                }
-            }
-        }
-
-        // TMCL -> PERFORMER "artist (instrument)"
-        for frame in tag.frames().filter(|f| f.id() == "TMCL") {
-            if let id3::Content::InvolvedPeopleList(mc) = frame.content() {
-                for item in &mc.items {
-                    vorbis.insert(
-                        "PERFORMER",
-                        &format!("{} ({})", item.involvee, item.involvement),
-                    );
-                }
-            }
-        }
-
-        // UFID:http://musicbrainz.org -> MUSICBRAINZ_TRACKID
-        for frame in tag.frames().filter(|f| f.id() == "UFID") {
-            if let id3::Content::UniqueFileIdentifier(ufid) =
-                frame.content()
-            {
-                if ufid.owner_identifier == "http://musicbrainz.org" {
-                    if let Ok(mbid) =
-                        std::str::from_utf8(&ufid.identifier)
-                    {
-                        vorbis.insert("MUSICBRAINZ_TRACKID", mbid);
-                    }
-                }
-            }
-        }
-
-        // WCOP -> LICENSE, WOAR -> WEBSITE (web URL frames)
-        for (frame_id, vorbis_name) in
-            [("WCOP", "LICENSE"), ("WOAR", "WEBSITE")]
-        {
-            if let Some(f) = tag.get(frame_id) {
-                if let id3::Content::Link(url) = f.content() {
-                    vorbis.insert(vorbis_name, url);
-                }
-            }
-        }
-
-        // TXXX -> use ID3_TXXX_VORBIS_MAP for known descriptions that need
-        // renaming; fall back to the description as-is for everything else
-        // (ReplayGain, ASIN, BARCODE, CATALOGNUMBER, etc.).
-        for et in tag.extended_texts() {
-            if et.description.is_empty() {
-                continue;
-            }
-            let vorbis_name = ID3_TXXX_VORBIS_MAP
-                .iter()
-                .find(|(desc, _)| {
-                    desc.eq_ignore_ascii_case(&et.description)
-                })
-                .map(|&(_, name)| name)
-                .unwrap_or(&et.description);
-            for val in et.value.split('\0').filter(|s| !s.is_empty()) {
-                vorbis.insert(vorbis_name, val);
-            }
-        }
-
-        self.set_vorbis(vorbis);
-
-        for pic in tag.pictures() {
-            let pic_type: PictureType = if pic.picture_type
-                == id3::frame::PictureType::CoverFront
-            {
-                flac_codec::metadata::PictureType::FrontCover
-            } else if pic.picture_type
-                == id3::frame::PictureType::CoverBack
-            {
-                flac_codec::metadata::PictureType::BackCover
-            } else {
-                continue;
-            };
-            debug!("Adding ID3 Picture: {}", pic);
-            let picture = flac_codec::metadata::Picture::new(
-                pic_type,
-                pic.description.clone(),
-                pic.data.clone(),
-            );
-            if let Ok(my_pic) = picture {
-                self.add_picture(my_pic);
-            }
-        }
-    }
-
     #[inline(always)]
     pub fn write_to_buffer(
         &mut self,
@@ -635,14 +373,18 @@ impl PcmWriter {
             for s in 0..samples_used_per_chan {
                 let mut q = self.float_data[s];
                 self.scale_and_dither(&mut q);
-                self.push_samp(q as f32, chan);
+                if let Some(w) = self.stream_writer.as_mut() {
+                    w.push_sample_f32(chan, q as f32);
+                }
             }
         } else {
             for s in 0..samples_used_per_chan {
                 let mut qin: f64 = self.float_data[s];
                 self.scale_and_dither(&mut qin);
                 let quantized = self.quantize(&mut qin);
-                self.push_samp(quantized, chan);
+                if let Some(w) = self.stream_writer.as_mut() {
+                    w.push_sample(chan, quantized);
+                }
             }
         }
     }
