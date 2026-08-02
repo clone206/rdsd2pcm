@@ -26,9 +26,7 @@ use crate::pcm_writer::PcmWriter;
 use dsd_reader::DsdReader;
 use dsd_reader::dsd_file::DSD_64_RATE;
 use id3::TagLike;
-use log::error;
-use log::warn;
-use log::{debug, info, trace};
+use log::{debug, info, trace, warn};
 use std::error::Error;
 use std::ffi::OsString;
 use std::io;
@@ -241,7 +239,8 @@ impl ConversionContext {
             }
 
             // Progress accounting (also updates internal bytes/bits counters).
-            let _ = self.track_io(read_size, samples_used_per_chan, sender);
+            let _ =
+                self.track_io(read_size, samples_used_per_chan, sender);
         }
 
         self.send_output_percent(ONE_HUNDRED_PERCENT, sender);
@@ -262,9 +261,13 @@ impl ConversionContext {
         sender: Option<mpsc::Sender<ProgressUpdate>>,
     ) -> Result<(), Box<dyn Error>> {
         self.check_conv()?;
+        self.open_streamed_output_if_needed()?;
         let wall_start = Instant::now();
 
-        self.process_blocks(cancel_flag, &sender)?;
+        if let Err(e) = self.process_blocks(cancel_flag, &sender) {
+            self.abort_streamed_output();
+            return Err(e);
+        }
         self.send_output_percent(101.0, &sender);
 
         let dsp_elapsed = wall_start.elapsed();
@@ -275,10 +278,8 @@ impl ConversionContext {
             self.pcm_writer.clips()
         );
 
-        if self.pcm_writer.output() != OutputType::Stdout
-            && let Err(e) = self.write_file()
-        {
-            error!("Error writing file: {e}");
+        if self.pcm_writer.output() != OutputType::Stdout {
+            self.finalize_file()?;
         }
 
         self.send_output_percent(101.0, &sender);
@@ -292,6 +293,76 @@ impl ConversionContext {
         self.report_in_out();
 
         Ok(())
+    }
+
+    /// Prepare and open any format-specific streamed writer ahead of DSP
+    /// processing. FLAC requires metadata to be set before audio frames,
+    /// while AIFF, WAV only require writing a placeholder header
+    /// that is patched with final sizes
+    fn open_streamed_output_if_needed(
+        &mut self,
+    ) -> Result<(), Box<dyn Error>> {
+        if self.pcm_writer.output() == OutputType::Stdout {
+            return Ok(());
+        }
+
+        let parent = self
+            .dsd_reader
+            .parent_path()
+            .as_ref()
+            .map(|p| p.as_path())
+            .unwrap_or(Path::new("."));
+        let out_dir = self.derive_output_dir(parent)?;
+        let out_path = out_dir.join(&self.out_filename_path);
+        
+        let mut tag = self.dsd_reader.tag().as_ref().cloned();
+        if let Some(tag_ref) = tag.as_mut()
+            && self.append_rate_suffix
+        {
+            self.append_album_suffix(tag_ref);
+        }
+        self.pcm_writer.open_stream(&out_path, tag)
+    }
+
+    /// Clean up partially-written streamed outputs after cancellation or
+    /// errors in `process_blocks`. Unlike buffered formats (which do not
+    /// create output files until conversion succeeds), streamed formats may
+    /// already have emitted significant data to disk by the time an error
+    /// occurs.
+    fn abort_streamed_output(&mut self) {
+        if !self.pcm_writer.has_open_stream() {
+            return;
+        }
+        self.pcm_writer.abort_stream();
+
+        let parent = self
+            .dsd_reader
+            .parent_path()
+            .as_ref()
+            .map(|p| p.as_path())
+            .unwrap_or(Path::new(""));
+        let out_path = match self.derive_output_dir(parent) {
+            Ok(out_dir) => out_dir.join(&self.out_filename_path),
+            Err(e) => {
+                warn!(
+                    "Failed to resolve partial FLAC output path for cleanup: {}",
+                    e
+                );
+                return;
+            }
+        };
+        match std::fs::remove_file(&out_path) {
+            Ok(()) => debug!(
+                "Removed partial streamed output after cancelled/failed conversion: {}",
+                out_path.display()
+            ),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => warn!(
+                "Failed to remove partial streamed output '{}': {}",
+                out_path.display(),
+                e
+            ),
+        }
     }
 
     /// Main conversion loop with optional percentage progress sender
@@ -316,6 +387,7 @@ impl ConversionContext {
                 self.pcm_writer
                     .write_to_buffer(samples_used_per_chan, chan);
             }
+            self.pcm_writer.flush_stream()?;
             let pcm_frame_bytes =
                 self.track_io(read_size, samples_used_per_chan, sender);
             if self.pcm_writer.output() == OutputType::Stdout
@@ -448,18 +520,20 @@ impl ConversionContext {
         &self,
         parent: &Path,
     ) -> Result<PathBuf, Box<dyn Error>> {
+        let par_canon = parent.canonicalize()?;
         if let Some(out_dir) = self.pcm_writer.path() {
             trace!("Out dir present: {}", out_dir.display());
             if self.dsd_reader.std_in() {
                 return Ok(out_dir.clone());
             }
             let base_dir = self.base_dir.canonicalize()?;
-            let rel = parent.strip_prefix(&base_dir).unwrap_or(parent);
+            let rel =
+                par_canon.strip_prefix(&base_dir).unwrap_or(&par_canon);
 
             trace!(
                 "Relative path from base dir '{}' to input parent '{}' is '{}'",
                 base_dir.display(),
-                parent.display(),
+                par_canon.display(),
                 rel.display()
             );
             let full_dir = Path::new(out_dir).join(rel);
@@ -472,7 +546,7 @@ impl ConversionContext {
             Ok(PathBuf::from(""))
         } else {
             trace!("No Out dir present. Same as input.");
-            Ok(parent.to_path_buf())
+            Ok(par_canon)
         }
     }
 
@@ -532,15 +606,15 @@ impl ConversionContext {
         Ok((copied, total))
     }
 
-    fn write_file(&mut self) -> Result<(), Box<dyn Error>> {
-        debug!("Saving to file...");
+    fn finalize_file(&mut self) -> Result<(), Box<dyn Error>> {
+        debug!("Finalizing file...");
 
         let parent = self
             .dsd_reader
             .parent_path()
             .as_ref()
             .map(|p| p.as_path())
-            .unwrap_or(Path::new(""));
+            .unwrap_or(Path::new("."));
 
         let out_dir = self.derive_output_dir(parent)?;
         let out_path = out_dir.join(&self.out_filename_path);
@@ -562,26 +636,11 @@ impl ConversionContext {
             }
         }
 
-        if let Some(mut tag) = self.dsd_reader.tag().as_ref().cloned() {
-            // If -a/--append was requested and an album tag exists, append " [<Sample Rate>]" (dot-delimited) to album
-            if self.append_rate_suffix {
-                self.append_album_suffix(&mut tag);
-            }
-
-            if self.pcm_writer.output() == OutputType::Flac {
-                debug!("Preparing Vorbis Comment for FLAC...");
-                self.pcm_writer.id3_to_flac_meta(&tag);
-            }
-            self.pcm_writer.save_file(&out_path)?;
-
-            if self.pcm_writer.output() != OutputType::Flac {
-                // Write ID3 tags directly
-                debug!("Writing ID3 tags to file.");
-                tag.write_to_path(&out_path, tag.version())?;
-            }
-        } else {
-            debug!("Input file has no tag; skipping tag copy.");
-            self.pcm_writer.save_file(&out_path)?;
+        if self.pcm_writer.has_open_stream()
+        {
+            // Finalize streaming audio file, potentially including applying tagging.
+            self.pcm_writer.finalize_stream()?;
+            info!("Wrote to file: {}", out_path.to_string_lossy());
         }
 
         Ok(())

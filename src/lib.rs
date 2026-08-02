@@ -20,7 +20,6 @@
 //! Logging implemented via log crate.
 //! Reads DSD from stdin or file, writes PCM to stdout or file.
 
-mod audio_file;
 mod byte_precalc_decimator;
 mod conversion_context;
 mod dither;
@@ -28,6 +27,8 @@ mod filters;
 mod filters_lm;
 mod lm_resampler;
 mod pcm_writer;
+mod audio_file;
+mod tag_util;
 
 use std::sync::atomic::AtomicBool;
 use std::{error::Error, fs, io, path::PathBuf, sync::mpsc};
